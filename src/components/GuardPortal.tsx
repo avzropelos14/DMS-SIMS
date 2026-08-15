@@ -258,12 +258,12 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
   });
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#1a2b4a] via-[#2d4263] to-[#1a2b4a] flex items-center justify-center p-4">
-      {/* Mobile Container */}
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden" style={{ maxHeight: '90vh' }}>
-        
+    <div className="min-h-screen bg-gradient-to-br from-[#1a2b4a] via-[#2d4263] to-[#1a2b4a] flex items-center justify-center sm:p-4">
+      {/* App container: fills the real viewport on phones; on wider screens it's a centered "phone" card */}
+      <div className="w-full h-screen sm:h-auto sm:max-w-md bg-white sm:rounded-3xl sm:shadow-2xl overflow-hidden flex flex-col sm:max-h-[90vh]">
+
         {/* Header */}
-        <div className="bg-gradient-to-r from-[#1a2b4a] to-[#7d1935] p-6 text-white relative overflow-hidden">
+        <div className="shrink-0 bg-gradient-to-r from-[#1a2b4a] to-[#7d1935] p-6 text-white relative overflow-hidden">
           {/* Decorative elements */}
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#c9a961] rounded-full opacity-10 blur-2xl"></div>
           <div className="absolute bottom-0 left-0 w-24 h-24 bg-white rounded-full opacity-5 blur-xl"></div>
@@ -308,7 +308,7 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
         </div>
 
         {/* Content */}
-        <div className="h-[calc(90vh-240px)] overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto">
           {activeView === 'home' && (
             <div className="p-6 space-y-6">
               {/* Stats */}
@@ -407,7 +407,7 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                     setScanResult(null);
                     stopScanning();
                   }}
-                  className="w-10 h-10 bg-[#faf8f5] rounded-xl flex items-center justify-center hover:bg-[#eae7e0] transition-colors"
+                  className="w-11 h-11 bg-[#faf8f5] rounded-xl flex items-center justify-center hover:bg-[#eae7e0] transition-colors"
                 >
                   <ArrowLeft className="w-5 h-5 text-[#1a2b4a]" />
                 </button>
@@ -600,7 +600,7 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
               <div className="flex items-center gap-3 mb-4">
                 <button
                   onClick={() => setActiveView('home')}
-                  className="w-10 h-10 bg-[#faf8f5] rounded-xl flex items-center justify-center hover:bg-[#eae7e0] transition-colors"
+                  className="w-11 h-11 bg-[#faf8f5] rounded-xl flex items-center justify-center hover:bg-[#eae7e0] transition-colors"
                 >
                   <ArrowLeft className="w-5 h-5 text-[#1a2b4a]" />
                 </button>
