@@ -6317,6 +6317,20 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
     name: string; email: string; password: string;
     parent: { name: string; email: string; password: string | null; isNewAccount: boolean } | null;
   } | null>(null);
+  // Captured right before the form resets on a successful enroll, so "Enroll Another
+  // Child" can carry the same parent's info into the next submission untouched — the
+  // registrar never retypes the email, which is what actually prevents duplicate
+  // parent accounts (the reuse check in create-guardian-account matches on exact email).
+  const [lastGuardianContacts, setLastGuardianContacts] = useState<{
+    mother: EnrollmentPerson; father: EnrollmentPerson; guardian: EnrollmentPerson & { relationship: string };
+    designatedContact: '' | 'mother' | 'father' | 'guardian';
+  } | null>(null);
+
+  // --- Search existing guardians on file, to autofill a contact instead of retyping
+  // (and mistyping) their info — the real fix for duplicate parent accounts. ---
+  const [guardianSearch, setGuardianSearch] = useState('');
+  const [guardianSearchResults, setGuardianSearchResults] = useState<{ id: string; fullName: string; email: string; phone: string | null }[]>([]);
+  const [guardianSearching, setGuardianSearching] = useState(false);
 
   // --- Continuing Student re-enrollment: reuses the existing student row & login,
   // only creates a new per-year `enrollments` row (see Pending Re-Enrollments below). ---
@@ -6365,6 +6379,41 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
     })();
     return () => { active = false; };
   }, [schoolYear]);
+
+  useEffect(() => {
+    if (guardianSearch.trim().length < 2) {
+      setGuardianSearchResults([]);
+      return;
+    }
+    let active = true;
+    setGuardianSearching(true);
+    const t = setTimeout(async () => {
+      const q = guardianSearch.trim();
+      const { data } = await supabase
+        .from('guardians')
+        .select('id, full_name, email, phone')
+        .or(`full_name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%`)
+        .limit(10);
+      if (!active) return;
+      setGuardianSearchResults((data ?? []).map((g: any) => ({ id: g.id, fullName: g.full_name, email: g.email, phone: g.phone })));
+      setGuardianSearching(false);
+    }, 300);
+    return () => { active = false; clearTimeout(t); };
+  }, [guardianSearch]);
+
+  // Fills a Mother/Father/Guardian slot from a guardian record on file — keeps the exact
+  // stored email so create-guardian-account's dedup-by-email reuses the same login.
+  const fillContactFromGuardian = (target: 'mother' | 'father' | 'guardian', g: { fullName: string; email: string; phone: string | null }) => {
+    const { firstName, lastName } = splitStudentName(g.fullName);
+    const filled: EnrollmentPerson = { ...emptyPerson, firstName, lastName, phone: g.phone || '', email: g.email || '' };
+    setForm(f => ({
+      ...f,
+      [target]: target === 'guardian' ? { ...filled, relationship: f.guardian.relationship } : filled,
+      designatedContact: f.designatedContact || target,
+    }));
+    setGuardianSearch('');
+    setGuardianSearchResults([]);
+  };
 
   useEffect(() => {
     if (form.enrollmentType !== 'Continuing Student' || continuingSearch.trim().length < 2) {
@@ -6538,6 +6587,7 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
         isPrimaryContact: true,
       });
       setEnrollees(prev => [rowToEnrollee(data), ...prev]);
+      setLastGuardianContacts({ mother: form.mother, father: form.father, guardian: form.guardian, designatedContact: effectiveDesignatedContact });
       setForm(emptyForm);
       setNewStudentCredentials({
         name: `${form.firstName.trim()} ${form.lastName.trim()}`,
@@ -6786,6 +6836,36 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
 
           <FormSection icon={Users} title="Parent / Guardian Information" description="At least one parent or the guardian contact below is required">
             <div className="md:col-span-3 space-y-6">
+              <div className="p-4 bg-[#faf8f5] border border-gray-200 rounded-lg">
+                <label className={labelCls}>Search Existing Parent/Guardian on File <span className="text-[#8b8476] font-normal">(avoids creating a duplicate portal account)</span></label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                  <input
+                    value={guardianSearch}
+                    onChange={e => setGuardianSearch(e.target.value)}
+                    placeholder="Search by name, email, or phone — e.g. an existing sibling's parent…"
+                    className={inputCls + ' pl-9'}
+                  />
+                </div>
+                {guardianSearching && <p className="text-xs text-[#8b8476] mt-2">Searching…</p>}
+                {guardianSearchResults.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {guardianSearchResults.map(g => (
+                      <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 bg-white border border-gray-200 rounded-lg text-sm">
+                        <div className="min-w-0">
+                          <p className="font-medium text-[#2c2c2c] truncate">{g.fullName}</p>
+                          <p className="text-xs text-[#8b8476] truncate">{g.email}{g.phone ? ` • ${g.phone}` : ''}</p>
+                        </div>
+                        <div className="flex gap-1.5 shrink-0">
+                          <button type="button" onClick={() => fillContactFromGuardian('mother', g)} className="px-2.5 py-1.5 border border-[#1a2b4a] text-[#1a2b4a] rounded-md text-xs font-semibold hover:bg-[#1a2b4a]/5">Use as Mother</button>
+                          <button type="button" onClick={() => fillContactFromGuardian('father', g)} className="px-2.5 py-1.5 border border-[#1a2b4a] text-[#1a2b4a] rounded-md text-xs font-semibold hover:bg-[#1a2b4a]/5">Use as Father</button>
+                          <button type="button" onClick={() => fillContactFromGuardian('guardian', g)} className="px-2.5 py-1.5 border border-[#1a2b4a] text-[#1a2b4a] rounded-md text-xs font-semibold hover:bg-[#1a2b4a]/5">Use as Guardian</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <PersonFieldGroup
                 heading="Mother"
                 lastNameLabel="Maiden Last Name"
@@ -7037,6 +7117,23 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
                   )}
                 </div>
               </div>
+            )}
+            {newStudentCredentials.parent && lastGuardianContacts && (
+              <button
+                onClick={() => {
+                  setForm({
+                    ...emptyForm,
+                    mother: lastGuardianContacts.mother,
+                    father: lastGuardianContacts.father,
+                    guardian: lastGuardianContacts.guardian,
+                    designatedContact: lastGuardianContacts.designatedContact,
+                  });
+                  setNewStudentCredentials(null);
+                }}
+                className="w-full px-6 py-3 border-2 border-[#1a2b4a] text-[#1a2b4a] rounded-lg hover:bg-[#1a2b4a]/5 transition-all font-medium"
+              >
+                Enroll Another Child (Same Parent)
+              </button>
             )}
             <button
               onClick={() => setNewStudentCredentials(null)}
