@@ -1,0 +1,3321 @@
+//old admin
+
+
+
+import { useState, Fragment, useEffect } from 'react';
+import { DashboardLayout } from './DashboardLayout';
+import schoolLogo from './assets/dmgteLogo.jpg'
+import {
+  LayoutDashboard, Users, GraduationCap, Calendar,
+  DollarSign, Settings, UserPlus, Search, Filter,
+  Download, MoreVertical, Award, AlertCircle, CheckCircle,
+  Clock, Mail, Phone, MapPin, Edit, Trash2, Eye,
+  UserCheck, UserX, BookMarked, Shield, CreditCard,
+  FileCheck, X, Check, Printer, User, Briefcase, Wrench,
+  BookMarked as BookIcon, Heart, Stethoscope, Archive, ChevronDown,
+  Plus, Layers, BookOpen, QrCode
+} from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import {supabase} from './../supabase';
+
+interface AdminDashboardProps {
+  user: any;
+  onLogout: () => void;
+  accessLevel?: 'full' | 'registrar';
+  tuitionFee?: number;
+  onTuitionFeeChange?: (fee: number) => void;
+}
+
+export function AdminDashboard({ user, onLogout, accessLevel = 'full', tuitionFee = 140000, onTuitionFeeChange }: AdminDashboardProps) {
+  const isRegistrar = accessLevel === 'registrar';
+  const isAdmin = !isRegistrar;
+  const [activeView, setActiveView] = useState(isRegistrar ? 'students' : 'overview');
+  const [schoolYear, setSchoolYear] = useState('2025-2026');
+
+  const fullNavigation = [
+    { id: 'overview', label: 'Dashboard Overview', icon: LayoutDashboard },
+    { id: 'students', label: 'Student Management', icon: GraduationCap },
+    { id: 'staff', label: 'Staff & Teachers', icon: Users },
+    { id: 'idgeneration', label: 'ID Generation', icon: CreditCard },
+    /* { id: 'financials', label: 'Financial Overview', icon: DollarSign }, */
+    { id: 'settings', label: 'System Settings', icon: Settings }
+  ];
+
+  const registrarNavigation = [
+    { id: 'students', label: 'Student Management', icon: GraduationCap },
+    { id: 'academics', label: 'Schedule & Classes', icon: Calendar },
+    { id: 'staff', label: 'Faculty/Staff Applications', icon: Users }
+  ];
+
+  const navigation = isRegistrar ? registrarNavigation : fullNavigation;
+
+  return (
+    <DashboardLayout
+      user={user}
+      role="admin"
+      navigation={navigation}
+      activeView={activeView}
+      onViewChange={setActiveView}
+      onLogout={onLogout}
+      schoolYear={schoolYear}
+      onSchoolYearChange={setSchoolYear}
+    >
+
+      {activeView === 'overview' && !isRegistrar && <OverviewSection user={user} schoolYear={schoolYear} />}
+      {activeView === 'students' && <StudentManagement schoolYear={schoolYear} isAdmin={isAdmin} />}
+      {activeView === 'staff' && <StaffManagement schoolYear={schoolYear} isAdmin={isAdmin} />}
+      {activeView === 'academics' && <AcademicsSection schoolYear={schoolYear} />}
+      {activeView === 'idgeneration' && !isRegistrar && <IDGenerationSection schoolYear={schoolYear} />}
+      {activeView === 'financials' && !isRegistrar && <FinancialSection schoolYear={schoolYear} tuitionFee={tuitionFee} onTuitionFeeChange={onTuitionFeeChange} />}
+      {activeView === 'settings' && !isRegistrar && <SettingsSection tuitionFee={tuitionFee} onTuitionFeeChange={onTuitionFeeChange} />}
+    </DashboardLayout>
+  );
+}
+
+// Overview Section
+function OverviewSection({ user, schoolYear }: { user: any; schoolYear: string }) {
+  const [showEnrollModal, setShowEnrollModal] = useState(false);
+  const [showFacultyModal, setShowFacultyModal] = useState(false);
+  const [selectedFacultyRole, setSelectedFacultyRole] = useState<string | null>(null);
+  const [showEventModal, setShowEventModal] = useState(false);
+
+  
+  
+  const totalStudents = schoolYear === '2025-2026' ? 856 : 832;
+  const totalRevenue = schoolYear === '2025-2026' ? 45780000 : 43250000;
+
+  const stats = [
+    {
+      label: 'Total Students',
+      value: totalStudents.toLocaleString(),
+      icon: GraduationCap,
+      color: 'from-[#1a2b4a] to-[#2d4263]',
+      barColor: '#032b76c2'
+    },
+    {
+      label: 'Total Employees',
+      value: 89,
+      icon: Users,
+      color: 'from-[#7d1935] to-[#9b2847]',
+      barColor: '#7d1935cb'
+    },
+  ];
+
+  const recentActivities = [
+    { id: 1, type: 'enrollment', message: 'New student enrolled: Maria Santos (Grade 5)', time: '10 minutes ago', icon: UserPlus },
+    { id: 2, type: 'grade', message: 'Quarter 3 grades submitted by Math Department', time: '1 hour ago', icon: BookMarked },
+    { id: 3, type: 'attendance', message: 'Daily attendance report generated', time: '2 hours ago', icon: Calendar },
+    { id: 4, type: 'alert', message: 'Low attendance alert: Grade 2 Section B', time: '3 hours ago', icon: AlertCircle },
+    { id: 5, type: 'staff', message: 'New teacher hired: Ms. Jennifer Cruz (English)', time: '5 hours ago', icon: Users }
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2 ">
+          Administrator Dashboard
+        </h1>
+        <p className="text-[#6b6456]">
+          Welcome back, {user.name}. 
+        </p>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
+        {stats.map((stat, index) => {
+          const Icon = stat.icon;
+          return (
+            <div key={index} className={`bg-white rounded-xl shadow-sm border border-gray-200 p-6 transition-all border-l-[8px] border-b-[8px]`} style={{borderLeftColor: stat.barColor, borderBottomColor: stat.barColor}}>
+              <div className="flex items-center gap-4">
+                <div className={`w-12 h-12 bg-gradient-to-br ${stat.color} rounded-lg flex items-center justify-center`}>
+                  <Icon className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-2xl  font-bold text-[#2c2c2c] mb-1">{stat.value}</h3>
+                  <p className="text-sm  text-[#8b8476]">{stat.label}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Recent Activities & Quick Actions */}
+      <div className="gap-6">
+        {/* Quick Actions */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 w-75">
+          <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Quick Actions</h3>
+          <div className="space-y-3">
+            {/* <button 
+              onClick={() => setShowEnrollModal(true)}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all"
+            >
+              <UserPlus className="w-5 h-5" />
+              <span className="font-medium text-sm">Enroll Student</span>
+            </button> */}
+            <button 
+              onClick={() => {
+                setShowFacultyModal(true);
+                setSelectedFacultyRole(null);
+              }}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:shadow-lg transition-all"
+            >
+              <Users className="w-5 h-5" />
+              <span className="font-medium text-sm">Add Faculty/Staff</span>
+            </button>
+            {/* <button 
+              onClick={() => setShowEventModal(true)}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg hover:shadow-lg transition-all"
+            >
+              <Calendar className="w-5 h-5" />
+              <span className="font-medium text-sm">Create Event - Needs more planning</span>
+            </button> */}
+          </div>
+        </div>
+      </div>
+
+      {/* Enroll Student Modal */}
+      {showEnrollModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <UserPlus className="w-6 h-6" />
+                <h2 className="text-xl font-semibold">Enroll New Student</h2>
+              </div>
+              <button 
+                onClick={() => setShowEnrollModal(false)}
+                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+              {/* Student Information */}
+              <div>
+                <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Student Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">First Name *</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter first name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Last Name *</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter last name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Middle Name</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter middle name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Date of Birth *</label>
+                    <input 
+                      type="date" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Gender *</label>
+                    <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                      <option value="">Select gender</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Grade Level *</label>
+                    <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                      <option value="">Select grade</option>
+                      <option value="1">Grade 1</option>
+                      <option value="2">Grade 2</option>
+                      <option value="3">Grade 3</option>
+                      <option value="4">Grade 4</option>
+                      <option value="5">Grade 5</option>
+                      <option value="6">Grade 6</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Parent/Guardian Information */}
+              <div>
+                <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Parent/Guardian Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Parent/Guardian Name *</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter parent/guardian name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Relationship *</label>
+                    <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                      <option value="">Select relationship</option>
+                      <option value="father">Father</option>
+                      <option value="mother">Mother</option>
+                      <option value="guardian">Legal Guardian</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Contact Number *</label>
+                    <input 
+                      type="tel" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="+63 912 345 6789"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Email Address *</label>
+                    <input 
+                      type="email" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="parent@example.com"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Address */}
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-2">Home Address *</label>
+                <textarea 
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                  rows={3}
+                  placeholder="Enter complete home address"
+                ></textarea>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <button 
+                  onClick={() => setShowEnrollModal(false)}
+                  className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all font-medium"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    alert('Student enrollment submitted successfully!');
+                    setShowEnrollModal(false);
+                  }}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-medium"
+                >
+                  Enroll Student
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Faculty/Staff Modal */}
+      {showFacultyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
+            <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Users className="w-6 h-6" />
+                <h2 className="text-xl font-semibold">
+                  {!selectedFacultyRole ? 'Add Faculty/Staff - Select Role' : `Add New ${selectedFacultyRole}`}
+                </h2>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowFacultyModal(false);
+                  setSelectedFacultyRole(null);
+                }}
+                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6">
+              {!selectedFacultyRole ? (
+                // Role Selection Screen
+                <div className="space-y-4">
+                  <p className="text-[#6b6456] mb-6">
+                    Please select the type of faculty or staff member you want to add to the system.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Teacher Role */}
+                    <button
+                      onClick={() => setSelectedFacultyRole('Teacher')}
+                      className="p-6 border-2 border-gray-200 rounded-xl hover:border-[#7d1935] hover:bg-[#7d1935]/5 transition-all  group"
+                    >
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#7d1935] to-[#9b2847] rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <GraduationCap className="w-6 h-6 text-white" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-[#1a2b4a]">Teacher</h3>
+                      </div>
+                      <p className="text-sm text-[#6b6456]">
+                        Academic instructors with subject specializations
+                      </p>
+                    </button>
+
+                    {/* Administrative Staff */}
+                    <button
+                      onClick={() => setSelectedFacultyRole('Administrative Staff')}
+                      className="p-6 border-2 border-gray-200 rounded-xl hover:border-[#7d1935] hover:bg-[#7d1935]/5 transition-all  group"
+                    >
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <Briefcase className="w-6 h-6 text-white" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-[#1a2b4a]">Administrative Staff</h3>
+                      </div>
+                      <p className="text-sm text-[#6b6456]">
+                        Office and administrative support personnel
+                      </p>
+                    </button>
+
+                    {/* Guidance Counselor */}
+                    <button
+                      onClick={() => setSelectedFacultyRole('Guidance Counselor')}
+                      className="p-6 border-2 border-gray-200 rounded-xl hover:border-[#7d1935] hover:bg-[#7d1935]/5 transition-all  group"
+                    >
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#4a7d19] to-[#5a9b28] rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <Heart className="w-6 h-6 text-white" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-[#1a2b4a]">Guidance Counselor</h3>
+                      </div>
+                      <p className="text-sm text-[#6b6456]">
+                        Student counseling and guidance services
+                      </p>
+                    </button>
+
+                    {/* School Nurse */}
+                    <button
+                      onClick={() => setSelectedFacultyRole('School Nurse')}
+                      className="p-6 border-2 border-gray-200 rounded-xl hover:border-[#7d1935] hover:bg-[#7d1935]/5 transition-all  group"
+                    >
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#dc2626] to-[#ef4444] rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <Stethoscope className="w-6 h-6 text-white" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-[#1a2b4a]">School Nurse</h3>
+                      </div>
+                      <p className="text-sm text-[#6b6456]">
+                        Health services and medical assistance
+                      </p>
+                    </button>
+
+                    {/* Maintenance Staff */}
+                    <button
+                      onClick={() => setSelectedFacultyRole('Maintenance Staff')}
+                      className="p-6 border-2 border-gray-200 rounded-xl hover:border-[#7d1935] hover:bg-[#7d1935]/5 transition-all  group"
+                    >
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-[#78350f] to-[#92400e] rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform">
+                          <Wrench className="w-6 h-6 text-white" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-[#1a2b4a]">Maintenance Staff</h3>
+                      </div>
+                      <p className="text-sm text-[#6b6456]">
+                        Facilities maintenance and janitorial services
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              ) : selectedFacultyRole === 'Teacher' ? (
+                // Teacher Form
+                <TeacherForm 
+                  onCancel={() => setSelectedFacultyRole(null)} 
+                  onSubmit={() => {
+                    alert('Teacher added successfully!');
+                    setShowFacultyModal(false);
+                    setSelectedFacultyRole(null);
+                  }}
+                />
+              ) : (
+                // Generic Staff Form for other roles
+                <StaffForm 
+                  role={selectedFacultyRole}
+                  onCancel={() => setSelectedFacultyRole(null)} 
+                  onSubmit={() => {
+                    alert(`${selectedFacultyRole} added successfully!`);
+                    setShowFacultyModal(false);
+                    setSelectedFacultyRole(null);
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Event Modal */}
+      {showEventModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
+            <div className="sticky top-0 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Calendar className="w-6 h-6" />
+                <h2 className="text-xl font-semibold">Create School Event</h2>
+              </div>
+              <button 
+                onClick={() => setShowEventModal(false)}
+                className="p-1 hover:bg-white/20 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-6">
+              {/* Event Details */}
+              <div>
+                <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Event Details</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Event Title *</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter event title"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Event Type *</label>
+                    <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                      <option value="">Select type</option>
+                      <option value="academic">Academic</option>
+                      <option value="religious">Religious/Spiritual</option>
+                      <option value="sports">Sports & Athletics</option>
+                      <option value="cultural">Cultural</option>
+                      <option value="parent-meeting">Parent Meeting</option>
+                      <option value="holiday">Holiday/Break</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-[#6b6456] mb-2">Start Date & Time *</label>
+                      <input 
+                        type="datetime-local" 
+                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-[#6b6456] mb-2">End Date & Time *</label>
+                      <input 
+                        type="datetime-local" 
+                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Location *</label>
+                    <input 
+                      type="text" 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      placeholder="Enter event location"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Description *</label>
+                    <textarea 
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      rows={4}
+                      placeholder="Describe the event details, objectives, and any special instructions"
+                    ></textarea>
+                  </div>
+                </div>
+              </div>
+
+              {/* Target Audience */}
+              <div>
+                <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Target Audience</h3>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-[#faf8f5] cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 text-[#c9a961] rounded" />
+                    <span className="text-sm text-[#2c2c2c]">All Students</span>
+                  </label>
+                  <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-[#faf8f5] cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 text-[#c9a961] rounded" />
+                    <span className="text-sm text-[#2c2c2c]">Parents/Guardians</span>
+                  </label>
+                  <label className="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-[#faf8f5] cursor-pointer">
+                    <input type="checkbox" className="w-4 h-4 text-[#c9a961] rounded" />
+                    <span className="text-sm text-[#2c2c2c]">Teachers & Staff</span>
+                  </label>
+                  <div>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-2">Specific Grade Levels (Optional)</label>
+                    <select multiple className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" size={3}>
+                      <option value="1">Grade 1</option>
+                      <option value="2">Grade 2</option>
+                      <option value="3">Grade 3</option>
+                      <option value="4">Grade 4</option>
+                      <option value="5">Grade 5</option>
+                      <option value="6">Grade 6</option>
+                    </select>
+                    <p className="text-xs text-[#8b8476] mt-1">Hold Ctrl/Cmd to select multiple grades</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <button 
+                  onClick={() => setShowEventModal(false)}
+                  className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all font-medium"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    alert('Event created successfully!');
+                    setShowEventModal(false);
+                  }}
+                  className="flex-1 px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg hover:shadow-lg transition-all font-medium"
+                >
+                  Create Event
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Teacher Form Component
+function TeacherForm({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: () => void }) {
+  return (
+    <div className="space-y-6">
+      {/* Personal Information */}
+      <div>
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Personal Information</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">First Name *</label>
+            <input 
+              type="text" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="Enter first name"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Last Name *</label>
+            <input 
+              type="text" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="Enter last name"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Email Address *</label>
+            <input 
+              type="email" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="teacher@dumaguete-mission.edu"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Contact Number *</label>
+            <input 
+              type="tel" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="+63 917 234 5678"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Employment Information */}
+      <div>
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Employment Information</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Subject Specialization *</label>
+            <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+              <option value="">Select subject</option>
+              <option value="mathematics">Mathematics</option>
+              <option value="english">English</option>
+              <option value="science">Science</option>
+              <option value="filipino">Filipino</option>
+              <option value="araling-panlipunan">Araling Panlipunan</option>
+              <option value="mapeh">MAPEH</option>
+              <option value="edukasyon-sa-pagpapakatao">Edukasyon sa Pagpapakatao</option>
+              <option value="religion">Religion</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Grade Levels *</label>
+            <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+              <option value="">Select grade levels</option>
+              <option value="1-2">Grades 1-2</option>
+              <option value="3-4">Grades 3-4</option>
+              <option value="5-6">Grades 5-6</option>
+              <option value="all">All Grades</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Employment Type *</label>
+            <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+              <option value="">Select type</option>
+              <option value="full-time">Full-time</option>
+              <option value="part-time">Part-time</option>
+              <option value="substitute">Substitute</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Start Date *</label>
+            <input 
+              type="date" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Qualifications */}
+      <div>
+        <label className="block text-sm font-medium text-[#6b6456] mb-2">Qualifications & Certifications</label>
+        <textarea 
+          className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+          rows={3}
+          placeholder="Enter qualifications, degrees, and certifications"
+        ></textarea>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex gap-3 pt-4 border-t border-gray-200">
+        <button 
+          onClick={onCancel}
+          className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all font-medium"
+        >
+          Back
+        </button>
+        <button 
+          onClick={onSubmit}
+          className="flex-1 px-6 py-3 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:shadow-lg transition-all font-medium"
+        >
+          Add Teacher
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Staff Form Component
+function StaffForm({ role, onCancel, onSubmit }: { role: string; onCancel: () => void; onSubmit: () => void }) {
+  return (
+    <div className="space-y-6">
+      {/* Personal Information */}
+      <div>
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Personal Information</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">First Name *</label>
+            <input 
+              type="text" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="Enter first name"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Last Name *</label>
+            <input 
+              type="text" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="Enter last name"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Email Address *</label>
+            <input 
+              type="email" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="staff@dumaguete-mission.edu"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Contact Number *</label>
+            <input 
+              type="tel" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+              placeholder="+63 917 234 5678"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Employment Information */}
+      <div>
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Employment Information</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {role === 'Administrative Staff' && (
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-2">Department *</label>
+              <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                <option value="">Select department</option>
+                <option value="registrar">Registrar's Office</option>
+                <option value="admissions">Admissions Office</option>
+                <option value="accounting">Accounting</option>
+                <option value="hr">Human Resources</option>
+                <option value="principal">Principal's Office</option>
+              </select>
+            </div>
+          )}
+          {role === 'Librarian' && (
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-2">Specialization *</label>
+              <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                <option value="">Select specialization</option>
+                <option value="cataloging">Cataloging & Classification</option>
+                <option value="reference">Reference Services</option>
+                <option value="digital">Digital Resources</option>
+                <option value="children">Children's Literature</option>
+              </select>
+            </div>
+          )}
+          {role === 'Guidance Counselor' && (
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-2">Counseling Focus *</label>
+              <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                <option value="">Select focus area</option>
+                <option value="academic">Academic Counseling</option>
+                <option value="career">Career Guidance</option>
+                <option value="personal">Personal/Social Development</option>
+                <option value="special-needs">Special Needs Support</option>
+              </select>
+            </div>
+          )}
+          {role === 'School Nurse' && (
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-2">License Number *</label>
+              <input 
+                type="text" 
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                placeholder="PRC License Number"
+              />
+            </div>
+          )}
+          {role === 'Maintenance Staff' && (
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-2">Role Type *</label>
+              <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                <option value="">Select role</option>
+                <option value="janitor">Janitorial Services</option>
+                <option value="electrician">Electrician</option>
+                <option value="plumber">Plumber</option>
+                <option value="carpenter">Carpenter</option>
+                <option value="groundskeeper">Groundskeeper</option>
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Employment Type *</label>
+            <select className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+              <option value="">Select type</option>
+              <option value="full-time">Full-time</option>
+              <option value="part-time">Part-time</option>
+              <option value="contractual">Contractual</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Start Date *</label>
+            <input 
+              type="date" 
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Qualifications */}
+      <div>
+        <label className="block text-sm font-medium text-[#6b6456] mb-2">
+          {role === 'School Nurse' || role === 'Guidance Counselor' 
+            ? 'Professional Qualifications & Certifications *' 
+            : 'Qualifications & Experience'}
+        </label>
+        <textarea 
+          className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+          rows={3}
+          placeholder={
+            role === 'School Nurse' 
+              ? 'Enter nursing qualifications, certifications, and medical training'
+              : role === 'Guidance Counselor'
+              ? 'Enter counseling credentials, certifications, and specialized training'
+              : 'Enter relevant qualifications, experience, and skills'
+          }
+        ></textarea>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex gap-3 pt-4 border-t border-gray-200">
+        <button 
+          onClick={onCancel}
+          className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all font-medium"
+        >
+          Back
+        </button>
+        <button 
+          onClick={onSubmit}
+          className="flex-1 px-6 py-3 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:shadow-lg transition-all font-medium"
+        >
+          Add {role}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Student Management Section
+type StudentStatus = 'Active' | 'Graduate' | 'Dropped' | 'Transferred';
+
+type Student = {
+  id: string; name: string; grade: string; section: string;
+  gpa: number; status: StudentStatus; email: string; phone: string; enrolled: string;
+  guardianName: string; guardianRelationship: string; guardianPhone: string; guardianEmail: string;
+};
+
+type SubjectAssignment = { id: string; subject: string; teacher: string };
+
+type ClassSection = {
+  id: string;
+  grade: string;
+  section: string;
+  adviser: string;
+  room: string;
+  subjects: SubjectAssignment[];
+};
+
+function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin: boolean }) {
+  const [activeTab, setActiveTab] = useState<StudentStatus>('Active');
+  const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [pendingStatus, setPendingStatus] = useState<StudentStatus>('Active');
+  const [search, setSearch] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('All');
+
+  const GRADE_OPTIONS = ['All', 'Kinder 1', 'Kinder 2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
+
+  // Splits a "First Middle Last" name into a "Last, First Middle" display string
+  const formatFamilyNameFirst = (fullName: string) => {
+    const parts = fullName.trim().split(/\s+/);
+    if (parts.length < 2) return fullName;
+    const family = parts[parts.length - 1];
+    const given = parts.slice(0, -1).join(' ');
+    return `${family}, ${given}`;
+  };
+
+  const [students, setStudents] = useState<Student[]>([
+    { id: 'STU2024001', name: 'Maria Santos', grade: 'Grade 5', section: 'Section A', gpa: 93.5, status: 'Active', email: 'msantos@student.dumaguete-mission.edu', phone: '+63 912 345 6789', enrolled: 'Aug 15, 2024', guardianName: 'Elena Santos', guardianRelationship: 'Mother', guardianPhone: '+63 917 111 2222', guardianEmail: 'elena.santos@gmail.com' },
+    { id: 'STU2024045', name: 'John Carlo Rivera', grade: 'Grade 4', section: 'Section B', gpa: 89.2, status: 'Active', email: 'jrivera@student.dumaguete-mission.edu', phone: '+63 923 456 7890', enrolled: 'Aug 16, 2024', guardianName: 'Ramon Rivera', guardianRelationship: 'Father', guardianPhone: '+63 917 222 3333', guardianEmail: 'ramon.rivera@gmail.com' },
+    { id: 'STU2024089', name: 'Sarah Mae Lopez', grade: 'Grade 6', section: 'Section A', gpa: 95.8, status: 'Active', email: 'slopez@student.dumaguete-mission.edu', phone: '+63 934 567 8901', enrolled: 'Aug 14, 2024', guardianName: 'Corazon Lopez', guardianRelationship: 'Mother', guardianPhone: '+63 917 333 4444', guardianEmail: 'corazon.lopez@gmail.com' },
+    { id: 'STU2024112', name: 'John Doe', grade: 'Grade 5', section: 'Section B', gpa: 91.4, status: 'Active', email: 'jdoe@student.dumaguete-mission.edu', phone: '+63 945 678 9012', enrolled: 'Aug 17, 2024', guardianName: 'Michael Doe', guardianRelationship: 'Father', guardianPhone: '+63 917 444 5555', guardianEmail: 'michael.doe@gmail.com' },
+    { id: 'STU2024156', name: 'Patricia Dela Cruz', grade: 'Grade 3', section: 'Section C', gpa: 87.6, status: 'Active', email: 'pdelacruz@student.dumaguete-mission.edu', phone: '+63 956 789 0123', enrolled: 'Aug 18, 2024', guardianName: 'Rosario Dela Cruz', guardianRelationship: 'Mother', guardianPhone: '+63 917 555 6666', guardianEmail: 'rosario.delacruz@gmail.com' },
+    { id: 'STU2023078', name: 'Jose Miguel Abad', grade: 'Grade 6', section: 'Section B', gpa: 91.2, status: 'Graduate', email: 'jabad@student.dumaguete-mission.edu', phone: '+63 967 890 1234', enrolled: 'Aug 12, 2023', guardianName: 'Fernando Abad', guardianRelationship: 'Father', guardianPhone: '+63 917 666 7777', guardianEmail: 'fernando.abad@gmail.com' },
+    { id: 'STU2023102', name: 'Lila Reyes Fontanilla', grade: 'Grade 6', section: 'Section A', gpa: 94.0, status: 'Graduate', email: 'lreyes@student.dumaguete-mission.edu', phone: '+63 978 901 2345', enrolled: 'Aug 11, 2023', guardianName: 'Grace Fontanilla', guardianRelationship: 'Guardian', guardianPhone: '+63 917 777 8888', guardianEmail: 'grace.fontanilla@gmail.com' },
+    { id: 'STU2024033', name: 'Carlo Bautista', grade: 'Grade 2', section: 'Section A', gpa: 78.5, status: 'Dropped', email: 'cbautista@student.dumaguete-mission.edu', phone: '+63 989 012 3456', enrolled: 'Aug 19, 2024', guardianName: 'Norma Bautista', guardianRelationship: 'Mother', guardianPhone: '+63 917 888 9999', guardianEmail: 'norma.bautista@gmail.com' },
+    { id: 'STU2024077', name: 'Anna Gabrielle Torres', grade: 'Grade 4', section: 'Section C', gpa: 85.0, status: 'Transferred', email: 'atorres@student.dumaguete-mission.edu', phone: '+63 910 123 4567', enrolled: 'Aug 20, 2024', guardianName: 'Ricardo Torres', guardianRelationship: 'Father', guardianPhone: '+63 917 999 0000', guardianEmail: 'ricardo.torres@gmail.com' },
+  ]);
+
+  // Class Management state
+  const [showClassManagement, setShowClassManagement] = useState(false);
+  const [classGradeFilter, setClassGradeFilter] = useState('All');
+  const [editingSection, setEditingSection] = useState<ClassSection | null>(null);
+  const [sectionForm, setSectionForm] = useState<{ adviser: string; room: string; subjects: SubjectAssignment[] }>({ adviser: '', room: '', subjects: [] });
+  const [showClassGradeDropdown, setShowClassGradeDropdown] = useState(false);
+  const [showAssignStudentsModal, setShowAssignStudentsModal] = useState(false);
+  const [assignForm, setAssignForm] = useState<{ studentId: string; grade: string; section: string }>({ studentId: '', grade: '', section: '' });
+
+  const [classSections, setClassSections] = useState<ClassSection[]>([
+    { id: 'CLS-1A', grade: 'Grade 1', section: 'Section A', adviser: 'Ms. Ivy Rose Tan', room: 'Room 101', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Ms. Ivy Rose Tan' },
+      { id: 'S2', subject: 'Filipino', teacher: 'Mr. Noel Pantaleon' },
+      { id: 'S3', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S4', subject: 'Christian Living', teacher: 'Pastor Ruben Amistoso' },
+    ] },
+    { id: 'CLS-2A', grade: 'Grade 2', section: 'Section A', adviser: 'Mrs. Teresita Gomez', room: 'Room 102', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Mrs. Teresita Gomez' },
+      { id: 'S2', subject: 'Filipino', teacher: 'Mr. Noel Pantaleon' },
+      { id: 'S3', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S4', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+    ] },
+    { id: 'CLS-3C', grade: 'Grade 3', section: 'Section C', adviser: 'Ms. Charmaine Yu', room: 'Room 103', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Ms. Charmaine Yu' },
+      { id: 'S2', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+      { id: 'S3', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S4', subject: 'Araling Panlipunan', teacher: 'Mr. Noel Pantaleon' },
+    ] },
+    { id: 'CLS-4B', grade: 'Grade 4', section: 'Section B', adviser: 'Ms. Jennifer Cruz', room: 'Room 201', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Ms. Jennifer Cruz' },
+      { id: 'S2', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S3', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+      { id: 'S4', subject: 'MAPEH', teacher: 'Mr. Kristoffer Alba' },
+    ] },
+    { id: 'CLS-4C', grade: 'Grade 4', section: 'Section C', adviser: 'Mr. Kristoffer Alba', room: 'Room 202', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Ms. Jennifer Cruz' },
+      { id: 'S2', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S3', subject: 'MAPEH', teacher: 'Mr. Kristoffer Alba' },
+      { id: 'S4', subject: 'Filipino', teacher: 'Mr. Noel Pantaleon' },
+    ] },
+    { id: 'CLS-5A', grade: 'Grade 5', section: 'Section A', adviser: 'Mrs. Lorena Batungbakal', room: 'Room 301', subjects: [
+      { id: 'S1', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S2', subject: 'English', teacher: 'Ms. Jennifer Cruz' },
+      { id: 'S3', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+      { id: 'S4', subject: 'Christian Living', teacher: 'Pastor Ruben Amistoso' },
+    ] },
+    { id: 'CLS-5B', grade: 'Grade 5', section: 'Section B', adviser: 'Mr. Gerald Obeso', room: 'Room 302', subjects: [
+      { id: 'S1', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+      { id: 'S2', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S3', subject: 'English', teacher: 'Ms. Jennifer Cruz' },
+      { id: 'S4', subject: 'Araling Panlipunan', teacher: 'Mr. Noel Pantaleon' },
+    ] },
+    { id: 'CLS-6A', grade: 'Grade 6', section: 'Section A', adviser: 'Ms. Charmaine Yu', room: 'Room 401', subjects: [
+      { id: 'S1', subject: 'English', teacher: 'Ms. Charmaine Yu' },
+      { id: 'S2', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S3', subject: 'Science', teacher: 'Mr. Gerald Obeso' },
+      { id: 'S4', subject: 'MAPEH', teacher: 'Mr. Kristoffer Alba' },
+    ] },
+    { id: 'CLS-6B', grade: 'Grade 6', section: 'Section B', adviser: 'Mr. Noel Pantaleon', room: 'Room 402', subjects: [
+      { id: 'S1', subject: 'Filipino', teacher: 'Mr. Noel Pantaleon' },
+      { id: 'S2', subject: 'Araling Panlipunan', teacher: 'Mr. Noel Pantaleon' },
+      { id: 'S3', subject: 'Mathematics', teacher: 'Mrs. Lorena Batungbakal' },
+      { id: 'S4', subject: 'Christian Living', teacher: 'Pastor Ruben Amistoso' },
+    ] },
+  ]);
+
+  const tabConfig: Record<StudentStatus, { label: string; color: string; badge: string }> = {
+    Active: { label: 'Active', color: 'bg-green-100 text-green-800', badge: 'bg-green-500' },
+    Graduate: { label: 'Graduate', color: 'bg-blue-100 text-blue-800', badge: 'bg-blue-500' },
+    Dropped: { label: 'Dropped', color: 'bg-red-100 text-red-800', badge: 'bg-red-500' },
+    Transferred: { label: 'Transferred', color: 'bg-purple-100 text-purple-800', badge: 'bg-purple-500' },
+  };
+
+  // Labels used only for the status tab/dropdown control — the "Active" tab is
+  // presented to the admin as "All" but still maps to the underlying 'Active' status value.
+  const TAB_LABELS: Record<StudentStatus, string> = {
+    Active: 'All',
+    Graduate: 'Graduate',
+    Dropped: 'Dropped',
+    Transferred: 'Transferred',
+  };
+
+  const filtered = students
+    .filter(s => activeTab === 'Active' ? true : s.status === activeTab)
+    .filter(s => gradeFilter === 'All' || s.grade === gradeFilter)
+    .filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase()));
+
+  const counts: Record<StudentStatus, number> = {
+    Active: students.length,
+    Graduate: students.filter(s => s.status === 'Graduate').length,
+    Dropped: students.filter(s => s.status === 'Dropped').length,
+    Transferred: students.filter(s => s.status === 'Transferred').length,
+  };
+
+  const changeStatus = () => {
+    if (!selectedStudent) return;
+    setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, status: pendingStatus } : s));
+    setShowStatusModal(false);
+    setShowViewModal(false);
+  };
+
+  const deleteStudent = () => {
+    if (!selectedStudent) return;
+    setStudents(prev => prev.filter(s => s.id !== selectedStudent.id));
+    setShowDeleteModal(false);
+    setShowViewModal(false);
+  };
+
+  const openStatusChange = (student: Student) => {
+    setSelectedStudent(student);
+    setPendingStatus(student.status);
+    setShowStatusModal(true);
+  };
+
+  // Builds the payload encoded in each student's Parent/Guardian QR Authentication Pass.
+  // Security personnel scan this at dismissal to verify the pickup is an authorized guardian.
+  const buildGuardianQRPayload = (student: Student) => JSON.stringify({
+    type: 'GUARDIAN_AUTH_PASS',
+    studentId: student.id,
+    studentName: student.name,
+    grade: student.grade,
+    section: student.section,
+    guardianName: student.guardianName,
+    guardianRelationship: student.guardianRelationship,
+    guardianPhone: student.guardianPhone,
+    schoolYear,
+  });
+
+  const CLASS_GRADE_OPTIONS = ['All', 'Kinder 1', 'Kinder 2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
+
+  const openAssignStudents = () => {
+    setAssignForm({ studentId: students[0]?.id || '', grade: classGradeFilter !== 'All' ? classGradeFilter : (students[0]?.grade || 'Grade 1'), section: students[0]?.section || 'Section A' });
+    setShowAssignStudentsModal(true);
+  };
+
+  const saveStudentAssignment = () => {
+    if (!assignForm.studentId) return;
+    setStudents(prev => prev.map(s => s.id === assignForm.studentId ? { ...s, grade: assignForm.grade, section: assignForm.section } : s));
+    setShowAssignStudentsModal(false);
+  };
+
+  const classSectionCount = (grade: string, section: string) =>
+    students.filter(s => s.grade === grade && s.section === section && s.status === 'Active').length;
+
+  const filteredClassSections = classSections
+    .filter(c => classGradeFilter === 'All' || c.grade === classGradeFilter)
+    .sort((a, b) => a.grade.localeCompare(b.grade) || a.section.localeCompare(b.section));
+
+  const openSectionEditor = (cls: ClassSection) => {
+    setEditingSection(cls);
+    setSectionForm({ adviser: cls.adviser, room: cls.room, subjects: cls.subjects.map(s => ({ ...s })) });
+  };
+
+  const addSubjectRow = () => {
+    setSectionForm(f => ({ ...f, subjects: [...f.subjects, { id: `S${f.subjects.length + 1}-${Date.now()}`, subject: '', teacher: '' }] }));
+  };
+
+  const updateSubjectRow = (id: string, key: 'subject' | 'teacher', value: string) => {
+    setSectionForm(f => ({ ...f, subjects: f.subjects.map(row => row.id === id ? { ...row, [key]: value } : row) }));
+  };
+
+  const removeSubjectRow = (id: string) => {
+    setSectionForm(f => ({ ...f, subjects: f.subjects.filter(row => row.id !== id) }));
+  };
+
+  const saveSectionAssignments = () => {
+    if (!editingSection) return;
+    setClassSections(prev => prev.map(c => c.id === editingSection.id
+      ? { ...c, adviser: sectionForm.adviser, room: sectionForm.room, subjects: sectionForm.subjects.filter(s => s.subject.trim() && s.teacher.trim()) }
+      : c
+    ));
+    setEditingSection(null);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">Student Management</h1>
+          <p className="text-[#6b6456]">Manage student records and enrollment • {schoolYear}</p>
+        </div>
+      </div>
+
+      {/* Status Tabs */}
+      <div className="flex gap-2 flex-wrap items-start">
+        <div className="relative">
+          <button
+            onClick={() => setShowStatusDropdown(prev => !prev)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 transition-all border-[#1a2b4a] bg-[#1a2b4a] text-white"
+          >
+            <span>{TAB_LABELS[activeTab]}</span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showStatusDropdown ? 'rotate-180' : ''}`} />
+          </button>
+          {showStatusDropdown && (
+            <div className="absolute z-10 mt-2 flex flex-col gap-2 p-2 bg-white rounded-lg shadow-lg border border-gray-200 min-w-full">
+              {(['Active', 'Graduate', 'Dropped', 'Transferred'] as StudentStatus[]).map(tab => (
+                <button
+                  key={tab}
+                  onClick={() => { setActiveTab(tab); setShowStatusDropdown(false); }}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 transition-all ${activeTab === tab ? 'border-[#1a2b4a] bg-[#1a2b4a] text-white' : 'border-gray-200 text-[#6b6456] bg-white hover:border-[#1a2b4a]/30'}`}
+                >
+                  <span>{TAB_LABELS[tab]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => setShowClassManagement(true)}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 transition-all border-gray-200 text-[#6b6456] bg-white hover:border-[#1a2b4a]/30"
+        >
+          <Layers className="w-4 h-4" />
+          <span>Class Management</span>
+        </button>
+      </div>
+
+      {/* Search + Grade Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b8476]" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name or student ID..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-[15px]"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-[#8b8476] shrink-0" />
+            <select
+              value={gradeFilter}
+              onChange={e => setGradeFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-[#2c2c2c] focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white"
+            >
+              {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g === 'All' ? 'All Grades' : g}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="font-semibold text-[#1a2b4a]">List of Students <span className="text-sm font-normal text-[#8b8476]">({filtered.length})</span></h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-[#faf8f5] border-b border-gray-200">
+              <tr>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Student</th>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">ID</th>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Grade & Section</th>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">GPA</th>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Status</th>
+                <th className=" px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filtered.length === 0 ? (
+                <tr><td colSpan={6} className="px-6 py-10 text-center text-[#8b8476] text-sm">No {activeTab === 'Active' ? '' : `${activeTab.toLowerCase()} `}students found.</td></tr>
+              ) : filtered.map(student => (
+                <tr key={student.id} className="hover:bg-[#faf8f5] transition-colors">
+                  <td className="px-6 py-4">
+                    <div>
+                      <p className="font-medium text-[#2c2c2c]">{formatFamilyNameFirst(student.name)}</p>
+                      <p className="text-xs text-[#8b8476]">{student.email}</p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-sm text-[#6b6456] font-mono">{student.id}</td>
+                  <td className="px-6 py-4">
+                    <p className="text-sm text-[#2c2c2c]">{student.grade}</p>
+                    <p className="text-xs text-[#8b8476]">{student.section}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-[#1a2b4a]/10 text-[#1a2b4a]">{student.gpa}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${tabConfig[student.status].color}`}>
+                      {student.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => { setSelectedStudent(student); setShowViewModal(true); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="View">
+                        <Eye className="w-4 h-4 text-[#8b8476]" />
+                      </button>
+                      <button onClick={() => { setSelectedStudent(student); setShowEditModal(true); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Edit">
+                        <Edit className="w-4 h-4 text-[#8b8476]" />
+                      </button>
+                      <button onClick={() => openStatusChange(student)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="Change Status">
+                        <UserCheck className="w-4 h-4 text-blue-500" />
+                      </button>
+                      {isAdmin && (
+                        <button onClick={() => { setSelectedStudent(student); setShowDeleteModal(true); }} className="p-2 hover:bg-red-50 rounded-lg transition-colors" title="Delete Account">
+                          <Trash2 className="w-4 h-4 text-red-400" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* View Student Modal */}
+      {showViewModal && selectedStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3"><Eye className="w-5 h-5" /><h2 className="text-lg font-semibold">Student Details</h2></div>
+              <button onClick={() => setShowViewModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-5">
+              <div className="flex items-start gap-5 pb-5 border-b border-gray-200">
+                <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
+                  {selectedStudent.name.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-xl font-bold text-[#1a2b4a]">{selectedStudent.name}</h3>
+                  <p className="text-sm text-[#8b8476] font-mono">{selectedStudent.id}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{selectedStudent.email}</p>
+                  <span className={`mt-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${tabConfig[selectedStudent.status].color}`}>{selectedStudent.status}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                {[{ label: 'Grade', value: selectedStudent.grade }, { label: 'Section', value: selectedStudent.section }, { label: 'GPA', value: selectedStudent.gpa }].map(item => (
+                  <div key={item.label} className="p-3 bg-[#faf8f5] rounded-lg text-center">
+                    <p className="text-xs text-[#8b8476] mb-1">{item.label}</p>
+                    <p className="font-bold text-[#1a2b4a]">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                <strong>Enrolled:</strong> {selectedStudent.enrolled} &nbsp;&bull;&nbsp; <strong>Phone:</strong> {selectedStudent.phone}
+              </div>
+
+              {/* Parent/Guardian QR Authentication Pass */}
+              <div className="border-2 border-[#c9a961]/40 rounded-xl p-5 bg-[#fdf9f0]">
+                <div className="flex items-center gap-2 mb-4">
+                  <QrCode className="w-5 h-5 text-[#c9a961]" />
+                  <h3 className="text-sm font-semibold text-[#1a2b4a]">Parent/Guardian QR Authentication Pass</h3>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+                  <div id={`guardian-qr-${selectedStudent.id}`} className="p-3 bg-white rounded-lg border border-gray-200 shrink-0">
+                    <QRCodeSVG value={buildGuardianQRPayload(selectedStudent)} size={128} level="M" includeMargin={false} />
+                  </div>
+                  <div className="flex-1 min-w-0 space-y-1.5 text-sm">
+                    <p><span className="text-[#8b8476]">Authorized Guardian:</span> <span className="font-semibold text-[#2c2c2c]">{selectedStudent.guardianName}</span></p>
+                    <p><span className="text-[#8b8476]">Relationship:</span> <span className="font-medium text-[#2c2c2c]">{selectedStudent.guardianRelationship}</span></p>
+                    <p><span className="text-[#8b8476]">Contact:</span> <span className="font-medium text-[#2c2c2c]">{selectedStudent.guardianPhone}</span></p>
+                    <p className="text-xs text-[#8b8476] pt-1">Present this QR code at dismissal. Security personnel will scan it to verify the guardian's identity before releasing {selectedStudent.name.split(' ')[0]}.</p>
+                    <button
+                      onClick={() => window.print()}
+                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Print Pass
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2 border-t border-gray-200">
+                <button onClick={() => { setShowViewModal(false); setShowEditModal(true); }} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm">Edit</button>
+                <button onClick={() => openStatusChange(selectedStudent)} className="flex-1 px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg font-medium hover:bg-blue-50 transition-all text-sm">Change Status</button>
+                {isAdmin && <button onClick={() => { setShowDeleteModal(true); }} className="px-4 py-2.5 border-2 border-red-200 text-red-600 rounded-lg font-medium hover:bg-red-50 transition-all text-sm flex items-center gap-1"><Trash2 className="w-4 h-4" /></button>}
+                <button onClick={() => setShowViewModal(false)} className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {showEditModal && selectedStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3"><Edit className="w-5 h-5" /><h2 className="text-lg font-semibold">Edit Student</h2></div>
+              <button onClick={() => setShowEditModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  { label: 'Student ID', key: 'id', disabled: true },
+                  { label: 'Full Name', key: 'name' },
+                  { label: 'Email', key: 'email' },
+                  { label: 'Phone', key: 'phone' },
+                ].map(field => (
+                  <div key={field.key}>
+                    <label className="block text-sm font-medium text-[#6b6456] mb-1">{field.label}</label>
+                    <input type="text" defaultValue={(selectedStudent as any)[field.key]} disabled={field.disabled}
+                      className={`w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] ${field.disabled ? 'bg-gray-50 text-gray-400' : ''}`} />
+                  </div>
+                ))}
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Grade Level</label>
+                  <select defaultValue={selectedStudent.grade} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                    {['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6'].map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Section</label>
+                  <select defaultValue={selectedStudent.section} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                    {['Section A','Section B','Section C'].map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <button onClick={() => setShowEditModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={() => { alert('Student updated!'); setShowEditModal(false); }} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">Save Changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Status Modal */}
+      {showStatusModal && selectedStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+            <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3"><UserCheck className="w-5 h-5" /><h2 className="text-lg font-semibold">Change Status</h2></div>
+              <button onClick={() => setShowStatusModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-[#6b6456]">Update status for <strong className="text-[#1a2b4a]">{selectedStudent.name}</strong>:</p>
+              <div className="space-y-2">
+                {(['Active', 'Graduate', 'Dropped', 'Transferred'] as StudentStatus[]).map(s => (
+                  <label key={s} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${pendingStatus === s ? 'border-[#c9a961] bg-[#fdf9f0]' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <input type="radio" name="status" value={s} checked={pendingStatus === s} onChange={() => setPendingStatus(s)} className="accent-[#c9a961]" />
+                    <span className={`text-sm font-semibold px-2.5 py-0.5 rounded-full ${tabConfig[s].color}`}>{s}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-3 pt-2 border-t border-gray-200">
+                <button onClick={() => setShowStatusModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={changeStatus} disabled={pendingStatus === selectedStudent.status} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-50">Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && selectedStudent && isAdmin && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+            <div className="p-6 text-center space-y-4">
+              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 className="w-7 h-7 text-red-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-[#1a2b4a] mb-1">Delete Student Account</h3>
+                <p className="text-sm text-[#6b6456]">Permanently delete the account of <strong>{selectedStudent.name}</strong>? This action cannot be undone.</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowDeleteModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={deleteStudent} className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 transition-all">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Class Management Modal */}
+      {showClassManagement && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <Layers className="w-5 h-5" />
+                <div>
+                  <h2 className="text-lg font-semibold">Class Management</h2>
+                  <p className="text-xs text-white/70">Grade levels, sections, advisers & subject assignments • {schoolYear}</p>
+                </div>
+              </div>
+              <button onClick={() => setShowClassManagement(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              {/* Grade filter dropdown + Assign Students */}
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="relative">
+                  <button
+                    onClick={() => setShowClassGradeDropdown(prev => !prev)}
+                    className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold border-2 transition-all border-[#1a2b4a] bg-[#1a2b4a] text-white"
+                  >
+                    <span>{classGradeFilter === 'All' ? 'All Grade Levels' : classGradeFilter}</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showClassGradeDropdown ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showClassGradeDropdown && (
+                    <div className="absolute z-10 mt-2 grid grid-cols-2 gap-1.5 p-2 bg-white rounded-lg shadow-lg border border-gray-200 min-w-[280px] max-h-72 overflow-y-auto">
+                      {CLASS_GRADE_OPTIONS.map(g => (
+                        <button
+                          key={g}
+                          onClick={() => { setClassGradeFilter(g); setShowClassGradeDropdown(false); }}
+                          className={`px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all text-left ${
+                            classGradeFilter === g
+                              ? 'border-[#1a2b4a] bg-[#1a2b4a] text-white'
+                              : 'border-gray-200 text-[#6b6456] bg-white hover:border-[#1a2b4a]/30'
+                          }`}
+                        >
+                          {g === 'All' ? 'All Grades' : g}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={openAssignStudents}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white hover:shadow-lg transition-all"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Assign Students</span>
+                </button>
+              </div>
+
+              {/* Section cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredClassSections.length === 0 ? (
+                  <div className="md:col-span-2 text-center text-sm text-[#8b8476] py-10">No sections found for this grade level.</div>
+                ) : filteredClassSections.map(cls => {
+                  const enrolled = classSectionCount(cls.grade, cls.section);
+                  return (
+                    <div key={cls.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow">
+                      <div className="bg-[#faf8f5] px-4 py-3 flex items-center justify-between border-b border-gray-200">
+                        <div>
+                          <p className="font-bold text-[#1a2b4a] text-sm">{cls.grade} — {cls.section}</p>
+                          <p className="text-xs text-[#8b8476]">{cls.room}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#1a2b4a]/10 text-[#1a2b4a]">
+                            <GraduationCap className="w-3 h-3" /> {enrolled} students
+                          </span>
+                          <button onClick={() => openSectionEditor(cls)} className="p-1.5 hover:bg-gray-200 rounded-lg transition-colors" title="Edit Section">
+                            <Edit className="w-4 h-4 text-[#8b8476]" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div className="flex items-center gap-2 text-sm">
+                          <UserCheck className="w-4 h-4 text-[#c9a961] shrink-0" />
+                          <span className="text-[#6b6456]">Adviser:</span>
+                          <span className="font-semibold text-[#2c2c2c]">{cls.adviser || '—'}</span>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-2 flex items-center gap-1">
+                            <BookOpen className="w-3.5 h-3.5" /> Subjects & Teachers
+                          </p>
+                          {cls.subjects.length === 0 ? (
+                            <p className="text-xs text-[#8b8476] italic">No subjects assigned yet.</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {cls.subjects.map(sub => (
+                                <div key={sub.id} className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg">
+                                  <span className="text-[#2c2c2c] font-medium">{sub.subject}</span>
+                                  <span className="text-[#6b6456] text-xs">{sub.teacher}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign Students to Grade/Section Modal */}
+      {showAssignStudentsModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <UserPlus className="w-5 h-5" />
+                <h3 className="text-lg font-semibold">Assign Student to Grade & Section</h3>
+              </div>
+              <button onClick={() => setShowAssignStudentsModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Student</label>
+                <select
+                  value={assignForm.studentId}
+                  onChange={e => setAssignForm(f => ({ ...f, studentId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7d1935]/20"
+                >
+                  {students.map(s => <option key={s.id} value={s.id}>{formatFamilyNameFirst(s.name)} — {s.id}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Grade Level</label>
+                  <select
+                    value={assignForm.grade}
+                    onChange={e => setAssignForm(f => ({ ...f, grade: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7d1935]/20"
+                  >
+                    {CLASS_GRADE_OPTIONS.filter(g => g !== 'All').map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Section</label>
+                  <select
+                    value={assignForm.section}
+                    onChange={e => setAssignForm(f => ({ ...f, section: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7d1935]/20"
+                  >
+                    {['Section A', 'Section B', 'Section C'].map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+              <p className="text-xs text-[#8b8476]">This updates the selected student's grade and section, which will be reflected in the corresponding Class Management roster.</p>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button onClick={() => setShowAssignStudentsModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+              <button onClick={saveStudentAssignment} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">Assign</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Section Assignments Modal */}
+      {editingSection && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Edit className="w-5 h-5" />
+                <h3 className="text-lg font-semibold">{editingSection.grade} — {editingSection.section}</h3>
+              </div>
+              <button onClick={() => setEditingSection(null)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Adviser</label>
+                  <input
+                    value={sectionForm.adviser}
+                    onChange={e => setSectionForm(f => ({ ...f, adviser: e.target.value }))}
+                    placeholder="e.g. Ms. Jennifer Cruz"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Room</label>
+                  <input
+                    value={sectionForm.room}
+                    onChange={e => setSectionForm(f => ({ ...f, room: e.target.value }))}
+                    placeholder="e.g. Room 201"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-[#6b6456]">Subjects & Assigned Teachers</label>
+                  <button onClick={addSubjectRow} className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline">
+                    <Plus className="w-3.5 h-3.5" /> Add Subject
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {sectionForm.subjects.length === 0 ? (
+                    <p className="text-xs text-[#8b8476] italic py-2">No subjects yet — click "Add Subject" to assign one.</p>
+                  ) : sectionForm.subjects.map(row => (
+                    <div key={row.id} className="flex items-center gap-2">
+                      <input
+                        value={row.subject}
+                        onChange={e => updateSubjectRow(row.id, 'subject', e.target.value)}
+                        placeholder="Subject"
+                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      />
+                      <input
+                        value={row.teacher}
+                        onChange={e => updateSubjectRow(row.id, 'teacher', e.target.value)}
+                        placeholder="Teacher"
+                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                      />
+                      <button onClick={() => removeSubjectRow(row.id)} className="p-2 hover:bg-red-50 rounded-lg transition-colors shrink-0" title="Remove">
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <button onClick={() => setEditingSection(null)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={saveSectionAssignments} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">Save Changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Staff & Employee Management Section
+function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin: boolean }) {
+  type EmployeeStatus = 'active' | 'on-leave' | 'inactive';
+
+  type Employee = {
+    id: string; name: string; position: string; department: string;
+    email: string; phone: string; experience: string; education: string;
+    dateHired: string; status: EmployeeStatus;
+    address: string; licenseNo?: string; notes?: string;
+  };
+
+  const DEPARTMENTS = ['Administration', 'Mathematics', 'English', 'Science', 'Filipino', 'Araling Panlipunan', 'MAPEH', 'Christian Living', 'Student Services', 'Health Services', 'Library Services', 'Maintenance & Facilities', 'Security'];
+
+  const [employees, setEmployees] = useState<Employee[]>([
+    { id: 'EMP-F001', name: 'Ms. Lorena Batungbakal', position: 'Teacher', department: 'Mathematics', email: 'lbatungbakal@dumaguete-mission.edu', phone: '+63 917 112 3344', experience: '5 years', education: 'BSEd – Mathematics, Silliman University', dateHired: 'Jun 1, 2021', status: 'active', address: '45 Rizal Blvd, Dumaguete City' },
+    { id: 'EMP-F002', name: 'Mr. Danilo Escuadra', position: 'Guidance Counselor', department: 'Student Services', email: 'descuadra@dumaguete-mission.edu', phone: '+63 928 223 4455', experience: '8 years', education: 'MA Guidance & Counseling, NORSU', dateHired: 'Jun 5, 2019', status: 'active', address: '12 Colon St, Dumaguete City', licenseNo: 'GC-2019-0234' },
+    { id: 'EMP-F003', name: 'Mrs. Carmen Villareal', position: 'School Nurse', department: 'Health Services', email: 'cvillareal@dumaguete-mission.edu', phone: '+63 939 334 5566', experience: '3 years', education: 'BS Nursing, Foundation University', dateHired: 'Aug 15, 2023', status: 'on-leave', address: '78 San Jose St, Dumaguete City', licenseNo: 'RN-2021-5678', notes: 'Maternity leave through Sep 2026' },
+    { id: 'EMP-F004', name: 'Mr. Rafael Quimson', position: 'Librarian', department: 'Library Services', email: 'rquimson@dumaguete-mission.edu', phone: '+63 945 445 6677', experience: '6 years', education: 'BSLIS – Library Science, UP Visayas', dateHired: 'Jun 3, 2020', status: 'active', address: '23 Perdices St, Dumaguete City', licenseNo: 'LIB-2018-1122' },
+    { id: 'EMP-F005', name: 'Ms. Grace Fuentes', position: 'Administrative Staff', department: 'Administration', email: 'gfuentes@dumaguete-mission.edu', phone: '+63 956 556 7788', experience: '2 years', education: 'BSBA – Business Administration, NORSU', dateHired: 'Jan 10, 2024', status: 'active', address: '56 Real St, Dumaguete City' },
+    { id: 'EMP-F006', name: 'Ms. Ivy Rose Tan', position: 'Teacher', department: 'English', email: 'itan@dumaguete-mission.edu', phone: '+63 918 667 8899', experience: '4 years', education: 'BSEd – English, Silliman University', dateHired: 'Jun 2, 2022', status: 'active', address: '9 Legaspi St, Dumaguete City' },
+    { id: 'EMP-F007', name: 'Mr. Noel Pantaleon', position: 'Teacher', department: 'Filipino', email: 'npantaleon@dumaguete-mission.edu', phone: '+63 927 778 9900', experience: '10 years', education: 'BSEd – Filipino, Foundation University', dateHired: 'Jun 1, 2016', status: 'active', address: '31 Locsin St, Dumaguete City' },
+    { id: 'EMP-F008', name: 'Mr. Gerald Obeso', position: 'Teacher', department: 'Science', email: 'gobeso@dumaguete-mission.edu', phone: '+63 936 889 0011', experience: '7 years', education: 'BSEd – Science, Silliman University', dateHired: 'Jun 4, 2019', status: 'inactive', address: '18 Sta. Catalina St, Dumaguete City', notes: 'Resigned – last day May 2026' },
+  ]);
+
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<EmployeeStatus>('active');
+  const [statusNote, setStatusNote] = useState('');
+  const [search, setSearch] = useState('');
+  const [deptFilter, setDeptFilter] = useState('All');
+  const [activeTab, setActiveTab] = useState<'all' | EmployeeStatus>('all');
+  const [newEmployee, setNewEmployee] = useState<Omit<Employee, 'id' | 'status'>>({
+    name: '', position: '', department: DEPARTMENTS[0], email: '', phone: '', experience: '', education: '', dateHired: '', address: '', licenseNo: ''
+  });
+
+  const statusConfig: Record<EmployeeStatus, { label: string; bg: string; text: string; dot: string }> = {
+    active: { label: 'Active', bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-500' },
+    'on-leave': { label: 'On Leave', bg: 'bg-yellow-100', text: 'text-yellow-800', dot: 'bg-yellow-500' },
+    inactive: { label: 'Inactive', bg: 'bg-gray-200', text: 'text-gray-700', dot: 'bg-gray-500' },
+  };
+
+  const tabs = [
+    { id: 'all', label: 'All', count: employees.length },
+    { id: 'active', label: 'Active', count: employees.filter(e => e.status === 'active').length },
+    { id: 'on-leave', label: 'On Leave', count: employees.filter(e => e.status === 'on-leave').length },
+    { id: 'inactive', label: 'Inactive', count: employees.filter(e => e.status === 'inactive').length },
+  ] as const;
+
+  const filtered = employees
+    .filter(e => activeTab === 'all' || e.status === activeTab)
+    .filter(e => deptFilter === 'All' || e.department === deptFilter)
+    .filter(e => !search || e.name.toLowerCase().includes(search.toLowerCase()) || e.id.toLowerCase().includes(search.toLowerCase()) || e.position.toLowerCase().includes(search.toLowerCase()));
+
+  const openDetail = (emp: Employee) => { setSelectedEmployee(emp); setShowDetailModal(true); };
+  const openStatusChange = (emp: Employee) => { setSelectedEmployee(emp); setPendingStatus(emp.status); setStatusNote(emp.notes || ''); setShowStatusModal(true); };
+  const openEdit = (emp: Employee) => { setSelectedEmployee(emp); setShowEditModal(true); };
+
+  const confirmStatusChange = () => {
+    if (!selectedEmployee) return;
+    setEmployees(prev => prev.map(e => e.id === selectedEmployee.id ? { ...e, status: pendingStatus, notes: statusNote } : e));
+    setShowStatusModal(false);
+    setShowDetailModal(false);
+  };
+
+  const deleteEmployee = () => {
+    if (!selectedEmployee) return;
+    setEmployees(prev => prev.filter(e => e.id !== selectedEmployee.id));
+    setShowDeleteModal(false);
+    setShowDetailModal(false);
+  };
+
+  const saveEdit = (updated: Employee) => {
+    setEmployees(prev => prev.map(e => e.id === updated.id ? updated : e));
+    setShowEditModal(false);
+  };
+
+  const addEmployee = () => {
+    if (!newEmployee.name.trim() || !newEmployee.position.trim()) return;
+    const id = `EMP-${Date.now().toString().slice(-6)}`;
+    setEmployees(prev => [...prev, { ...newEmployee, id, status: 'active' }]);
+    setNewEmployee({ name: '', position: '', department: DEPARTMENTS[0], email: '', phone: '', experience: '', education: '', dateHired: '', address: '', licenseNo: '' });
+    setShowAddModal(false);
+  };
+
+  const initials = (name: string) => name.split(' ').filter((_: string, i: number) => i > 0 && i <= 2).map((n: string) => n[0]).join('');
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">Staff & Teachers Management</h1>
+          <p className="text-[#6b6456]">Manage all employees — teachers, staff, and administration • {schoolYear}</p>
+        </div>
+        {isAdmin && (
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all"
+          >
+            <UserPlus className="w-4 h-4" />
+            Add Employee
+          </button>
+        )}
+      </div>
+
+      {/* Tab Bar */}
+      <div className="flex gap-2 flex-wrap">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+              activeTab === t.id
+                ? 'border-[#1a2b4a] bg-[#1a2b4a] text-white'
+                : 'border-gray-200 text-[#6b6456] hover:border-[#1a2b4a]/30 bg-white'
+            }`}
+          >
+            <span>{t.label}</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${activeTab === t.id ? 'bg-white/20 text-white' : 'bg-gray-100 text-[#6b6456]'}`}>{t.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Search + Department Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b8476]" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name, ID, or position..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-[15px]"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-[#8b8476] shrink-0" />
+            <select
+              value={deptFilter}
+              onChange={e => setDeptFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-[#2c2c2c] focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white"
+            >
+              <option value="All">All Departments</option>
+              {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Employee List */}
+      <div className="space-y-4">
+        {filtered.map(emp => {
+          const sc = statusConfig[emp.status];
+          return (
+            <div key={emp.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-all">
+              <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+                <div className="w-14 h-14 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-xl flex items-center justify-center text-white text-lg font-bold shrink-0">
+                  {initials(emp.name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-start gap-2 mb-1">
+                    <h3 className="font-semibold text-[#1a2b4a] text-lg leading-tight">{emp.name}</h3>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${sc.bg} ${sc.text}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`}></span>
+                      {sc.label}
+                    </span>
+                  </div>
+                  <p className="text-sm font-medium text-[#c9a961] mb-1">{emp.position} – {emp.department}</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[#8b8476]">
+                    <span className="flex items-center gap-1"><Mail className="w-3 h-3" />{emp.email}</span>
+                    <span className="flex items-center gap-1"><Phone className="w-3 h-3" />{emp.phone}</span>
+                    <span>Hired: {emp.dateHired}</span>
+                  </div>
+                  {emp.notes && <p className="text-xs text-[#8b8476] mt-1 italic">{emp.notes}</p>}
+                </div>
+
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  <button
+                    onClick={() => openDetail(emp)}
+                    className="flex items-center gap-1.5 px-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-medium hover:border-[#1a2b4a] hover:bg-[#faf8f5] transition-all"
+                  >
+                    <Eye className="w-4 h-4 text-[#8b8476]" />
+                    <span className="hidden sm:inline">View</span>
+                  </button>
+                  {/* <button
+                    onClick={() => openEdit(emp)}
+                    className="flex items-center gap-1.5 px-3 py-2 border-2 border-gray-200 rounded-lg text-sm font-medium hover:border-[#1a2b4a] hover:bg-[#faf8f5] transition-all"
+                  >
+                    <Edit className="w-4 h-4 text-[#8b8476]" />
+                    <span className="hidden sm:inline">Edit</span>
+                  </button> */}
+                  <button
+                    onClick={() => openStatusChange(emp)}
+                    className="flex items-center gap-1.5 px-3 py-2 border-2 border-blue-200 rounded-lg text-sm font-medium text-blue-700 hover:bg-blue-50 transition-all"
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    <span className="hidden sm:inline">Status</span>
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => { setSelectedEmployee(emp); setShowDeleteModal(true); }}
+                      className="flex items-center gap-1.5 px-3 py-2 border-2 border-red-200 rounded-lg text-sm font-medium text-red-600 hover:bg-red-50 transition-all"
+                      title="Remove Employee"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+            <Users className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <p className="text-[#8b8476]">No employees found.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Detail Modal */}
+      {showDetailModal && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Briefcase className="w-6 h-6" />
+                <h3 className="text-xl font-semibold">Employee Details</h3>
+              </div>
+              <button onClick={() => setShowDetailModal(false)} className="p-1 hover:bg-white/20 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-5">
+              <div className="flex items-start gap-4 pb-5 border-b border-gray-200">
+                <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
+                  {initials(selectedEmployee.name)}
+                </div>
+                <div>
+                  <h4 className="text-xl font-bold text-[#1a2b4a]">{selectedEmployee.name}</h4>
+                  <p className="text-[#c9a961] font-medium">{selectedEmployee.position} – {selectedEmployee.department}</p>
+                  <span className={`inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${statusConfig[selectedEmployee.status].bg} ${statusConfig[selectedEmployee.status].text}`}>
+                    {statusConfig[selectedEmployee.status].label}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {[
+                  { label: 'Employee ID', value: selectedEmployee.id },
+                  { label: 'Email Address', value: selectedEmployee.email },
+                  { label: 'Phone Number', value: selectedEmployee.phone },
+                  { label: 'Home Address', value: selectedEmployee.address },
+                  { label: 'Years of Experience', value: selectedEmployee.experience },
+                  { label: 'Educational Background', value: selectedEmployee.education },
+                  { label: 'Professional License No.', value: selectedEmployee.licenseNo || 'N/A' },
+                  { label: 'Date Hired', value: selectedEmployee.dateHired },
+                ].map(item => (
+                  <div key={item.label} className="bg-[#faf8f5] rounded-lg p-3">
+                    <p className="text-xs font-semibold text-[#8b8476] mb-1 uppercase tracking-wide">{item.label}</p>
+                    <p className="text-sm text-[#2c2c2c] font-medium">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {selectedEmployee.notes && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-blue-800">Notes:</p>
+                  <p className="text-sm text-blue-700 mt-1">{selectedEmployee.notes}</p>
+                </div>
+              )}
+            </div>
+            <div className="p-6 border-t border-gray-200 flex flex-wrap gap-3">
+              <button onClick={() => { setShowDetailModal(false); openEdit(selectedEmployee); }} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm">Edit</button>
+              <button onClick={() => openStatusChange(selectedEmployee)} className="flex-1 px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg font-medium hover:bg-blue-50 transition-all text-sm">Change Status</button>
+              <button onClick={() => setShowDetailModal(false)} className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Employee Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3"><UserPlus className="w-5 h-5" /><h3 className="text-lg font-semibold">Add New Employee</h3></div>
+              <button onClick={() => setShowAddModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Full Name</label>
+                  <input value={newEmployee.name} onChange={e => setNewEmployee(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Ms. Juana Dela Cruz" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Position</label>
+                  <input value={newEmployee.position} onChange={e => setNewEmployee(f => ({ ...f, position: e.target.value }))} placeholder="e.g. Teacher" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Department</label>
+                  <select value={newEmployee.department} onChange={e => setNewEmployee(f => ({ ...f, department: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20">
+                    {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Email</label>
+                  <input value={newEmployee.email} onChange={e => setNewEmployee(f => ({ ...f, email: e.target.value }))} placeholder="name@dumaguete-mission.edu" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Phone</label>
+                  <input value={newEmployee.phone} onChange={e => setNewEmployee(f => ({ ...f, phone: e.target.value }))} placeholder="+63 9xx xxx xxxx" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Date Hired</label>
+                  <input type="date" value={newEmployee.dateHired} onChange={e => setNewEmployee(f => ({ ...f, dateHired: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Experience</label>
+                  <input value={newEmployee.experience} onChange={e => setNewEmployee(f => ({ ...f, experience: e.target.value }))} placeholder="e.g. 3 years" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Education</label>
+                  <input value={newEmployee.education} onChange={e => setNewEmployee(f => ({ ...f, education: e.target.value }))} placeholder="e.g. BSEd – Mathematics, Silliman University" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Address</label>
+                  <input value={newEmployee.address} onChange={e => setNewEmployee(f => ({ ...f, address: e.target.value }))} placeholder="Home address" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Professional License No. (optional)</label>
+                  <input value={newEmployee.licenseNo} onChange={e => setNewEmployee(f => ({ ...f, licenseNo: e.target.value }))} placeholder="e.g. LET-2024-1234" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button onClick={() => setShowAddModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+              <button onClick={addEmployee} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all">Add Employee</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Employee Modal */}
+      {showEditModal && selectedEmployee && (
+        <EmployeeEditModal employee={selectedEmployee} departments={DEPARTMENTS} onCancel={() => setShowEditModal(false)} onSave={saveEdit} />
+      )}
+
+      {/* Change Status Modal */}
+      {showStatusModal && selectedEmployee && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+            <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3"><UserCheck className="w-5 h-5" /><h2 className="text-lg font-semibold">Change Status</h2></div>
+              <button onClick={() => setShowStatusModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-[#6b6456]">Update status for <strong className="text-[#1a2b4a]">{selectedEmployee.name}</strong>:</p>
+              <div className="space-y-2">
+                {(['active', 'on-leave', 'inactive'] as EmployeeStatus[]).map(s => (
+                  <label key={s} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${pendingStatus === s ? 'border-[#c9a961] bg-[#fdf9f0]' : 'border-gray-200 hover:border-gray-300'}`}>
+                    <input type="radio" name="empstatus" value={s} checked={pendingStatus === s} onChange={() => setPendingStatus(s)} className="accent-[#c9a961]" />
+                    <span className={`text-sm font-semibold px-2.5 py-0.5 rounded-full ${statusConfig[s].bg} ${statusConfig[s].text}`}>{statusConfig[s].label}</span>
+                  </label>
+                ))}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Note (optional)</label>
+                <textarea value={statusNote} onChange={e => setStatusNote(e.target.value)} rows={2} placeholder="e.g. Maternity leave through Sep 2026" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 resize-none" />
+              </div>
+              <div className="flex gap-3 pt-2 border-t border-gray-200">
+                <button onClick={() => setShowStatusModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={confirmStatusChange} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all">Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && selectedEmployee && isAdmin && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+            <div className="p-6 text-center space-y-4">
+              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+                <Trash2 className="w-7 h-7 text-red-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-[#1a2b4a] mb-1">Remove Employee Record</h3>
+                <p className="text-sm text-[#6b6456]">Permanently remove <strong>{selectedEmployee.name}</strong> from the employee directory? This action cannot be undone.</p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setShowDeleteModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={deleteEmployee} className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 transition-all">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeeEditModal({ employee, departments, onCancel, onSave }: { employee: any; departments: string[]; onCancel: () => void; onSave: (updated: any) => void }) {
+  const [form, setForm] = useState({ ...employee });
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+          <div className="flex items-center gap-3"><Edit className="w-5 h-5" /><h2 className="text-lg font-semibold">Edit Employee</h2></div>
+          <button onClick={onCancel} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Employee ID</label>
+              <input value={form.id} disabled className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Full Name</label>
+              <input value={form.name} onChange={e => setForm((f: any) => ({ ...f, name: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Position</label>
+              <input value={form.position} onChange={e => setForm((f: any) => ({ ...f, position: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Department</label>
+              <select value={form.department} onChange={e => setForm((f: any) => ({ ...f, department: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                {departments.map(d => <option key={d}>{d}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Email</label>
+              <input value={form.email} onChange={e => setForm((f: any) => ({ ...f, email: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Phone</label>
+              <input value={form.phone} onChange={e => setForm((f: any) => ({ ...f, phone: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Experience</label>
+              <input value={form.experience} onChange={e => setForm((f: any) => ({ ...f, experience: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">License No.</label>
+              <input value={form.licenseNo || ''} onChange={e => setForm((f: any) => ({ ...f, licenseNo: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Education</label>
+              <input value={form.education} onChange={e => setForm((f: any) => ({ ...f, education: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-[#6b6456] mb-1">Address</label>
+              <input value={form.address} onChange={e => setForm((f: any) => ({ ...f, address: e.target.value }))} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+            </div>
+          </div>
+          <div className="flex gap-3 pt-4 border-t border-gray-200">
+            <button onClick={onCancel} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+            <button onClick={() => onSave(form)} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">Save Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ID Generation Section
+// ID Generation Section
+function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
+  type IDStudent = { id: string; name: string; grade: string; section: string; idPrinted: boolean; idIssued: string | null };
+
+  const GRADE_LEVELS = ['All', 'Kinder 1', 'Kinder 2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
+  const gradeOrder = GRADE_LEVELS.filter(g => g !== 'All');
+
+  const [idStudents, setIdStudents] = useState<IDStudent[]>([
+    { id: 'STU2026001', name: 'Maria Santos', grade: 'Grade 3', section: 'Section C', idPrinted: false, idIssued: null },
+    { id: 'STU2026002', name: 'John Carlo Rivera', grade: 'Grade 4', section: 'Section B', idPrinted: false, idIssued: null },
+    { id: 'STU2026003', name: 'Patricia Dela Cruz', grade: 'Grade 4', section: 'Section A', idPrinted: true, idIssued: 'Mar 2, 2026' },
+    { id: 'STU2026004', name: 'John Doe', grade: 'Grade 5', section: 'Section B', idPrinted: false, idIssued: null },
+    { id: 'STU2026005', name: 'Sarah Mae Lopez', grade: 'Grade 5', section: 'Section A', idPrinted: true, idIssued: 'Feb 28, 2026' },
+    { id: 'STU2026006', name: 'Jose Miguel Abad', grade: 'Grade 6', section: 'Section B', idPrinted: true, idIssued: 'Feb 20, 2026' },
+    { id: 'STU2026007', name: 'Lila Reyes Fontanilla', grade: 'Grade 6', section: 'Section A', idPrinted: false, idIssued: null },
+    { id: 'STU2026008', name: 'Ella Marie Suarez', grade: 'Kinder 2', section: 'Section A', idPrinted: false, idIssued: null },
+    { id: 'STU2026009', name: 'Nathan Reyes', grade: 'Kinder 1', section: 'Section A', idPrinted: false, idIssued: null },
+    { id: 'STU2026010', name: 'Carla Jimenez', grade: 'Grade 7', section: 'Section A', idPrinted: false, idIssued: null },
+    { id: 'STU2026011', name: 'Miguel Aranas', grade: 'Grade 8', section: 'Section A', idPrinted: true, idIssued: 'Jan 15, 2026' },
+    { id: 'STU2026012', name: 'Beatriz Nolasco', grade: 'Grade 10', section: 'Section A', idPrinted: false, idIssued: null },
+  ]);
+
+  const [gradeFilter, setGradeFilter] = useState('All');
+  const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showEditStudentModal, setShowEditStudentModal] = useState(false);
+  const [editingStudent, setEditingStudent] = useState<IDStudent | null>(null);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewStudent, setPreviewStudent] = useState<IDStudent | null>(null);
+
+  const filtered = idStudents
+    .filter(s => gradeFilter === 'All' || s.grade === gradeFilter)
+    .filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => gradeOrder.indexOf(a.grade) - gradeOrder.indexOf(b.grade) || a.name.localeCompare(b.name));
+
+  const todayLabel = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  const printOne = (id: string) => {
+    setIdStudents(prev => prev.map(s => s.id === id ? { ...s, idPrinted: true, idIssued: s.idIssued || todayLabel() } : s));
+  };
+
+  const printSelected = () => {
+    if (selectedIds.length === 0) return;
+    setIdStudents(prev => prev.map(s => selectedIds.includes(s.id) ? { ...s, idPrinted: true, idIssued: s.idIssued || todayLabel() } : s));
+    setSelectedIds([]);
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === filtered.length) setSelectedIds([]);
+    else setSelectedIds(filtered.map(s => s.id));
+  };
+
+  const printedCount = idStudents.filter(s => s.idPrinted).length;
+  const notPrintedCount = idStudents.length - printedCount;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student ID Generation</h1>
+        <p className="text-[#6b6456]">Generate and print student ID cards, filterable by grade level • {schoolYear}</p>
+      </div>
+
+      {/* Search + Grade Filter + Bulk Print */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b8476]" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name or student ID..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-[15px]"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-[#8b8476] shrink-0" />
+            <select
+              value={gradeFilter}
+              onChange={e => setGradeFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-[#2c2c2c] focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white"
+            >
+              {GRADE_LEVELS.map(g => <option key={g} value={g}>{g === 'All' ? 'All Grade Levels' : g}</option>)}
+            </select>
+          </div>
+          <button
+            onClick={printSelected}
+            disabled={selectedIds.length === 0}
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg text-sm font-semibold hover:shadow-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Printer className="w-4 h-4" />
+            Print Selected ({selectedIds.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Student Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="font-semibold text-[#1a2b4a]">List of Students <span className="text-sm font-normal text-[#8b8476]">({filtered.length})</span></h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-[#faf8f5] border-b border-gray-200">
+              <tr>
+                <th className="px-6 py-3">
+                  <input type="checkbox" checked={filtered.length > 0 && selectedIds.length === filtered.length} onChange={toggleSelectAll} className="accent-[#1a2b4a]" />
+                </th>
+                <th className="px-6 py-3 text-sm font-semibold text-[#1a2b4a] text-left">Student</th>
+                <th className="px-6 py-3 text-sm font-semibold text-[#1a2b4a] text-left">ID Number</th>
+                <th className="px-6 py-3 text-sm font-semibold text-[#1a2b4a] text-left">Grade & Section</th>
+                <th className="px-6 py-3 text-sm font-semibold text-[#1a2b4a] text-left">ID Status</th>
+                <th className="px-6 py-3 text-sm font-semibold text-[#1a2b4a] text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filtered.length === 0 ? (
+                <tr><td colSpan={6} className="px-6 py-10 text-center text-[#8b8476] text-sm">No students found for this grade level.</td></tr>
+              ) : filtered.map(s => (
+                <tr key={s.id} className="hover:bg-[#faf8f5] transition-colors">
+                  <td className="px-6 py-3">
+                    <input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => toggleSelect(s.id)} className="accent-[#1a2b4a]" />
+                  </td>
+                  <td className="px-6 py-3 font-medium text-[#2c2c2c]">{s.name}</td>
+                  <td className="px-6 py-3 font-mono text-sm text-[#6b6456]">{s.id}</td>
+                  <td className="px-6 py-3 text-sm text-[#6b6456]">{s.grade} — {s.section}</td>
+                  <td className="px-6 py-3">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${s.idPrinted ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                      {s.idPrinted ? `Printed ${s.idIssued ? '· ' + s.idIssued : ''}` : 'Not Printed'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { setPreviewStudent(s); setShowPreviewModal(true); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-[#6b6456] rounded-lg text-xs font-medium hover:border-[#1a2b4a] hover:bg-[#faf8f5] transition-all"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Preview
+                      </button>
+                      <button
+                        onClick={() => { setEditingStudent({ ...s }); setShowEditStudentModal(true); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-[#6b6456] rounded-lg text-xs font-medium hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => printOne(s.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 border border-[#1a2b4a] text-[#1a2b4a] rounded-lg text-xs font-medium hover:bg-[#1a2b4a] hover:text-white transition-all"
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                        {s.idPrinted ? 'Redownload ID' : 'Download ID'}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ID Preview Modal */}
+      {showPreviewModal && previewStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+            <div className="bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">ID Card Preview</h3>
+              <button onClick={() => setShowPreviewModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-6">
+              <div className="rounded-xl border-2 border-[#c9a961] overflow-hidden bg-gradient-to-br from-white to-[#faf8f5]">
+                <div className="bg-gradient-to-r from-[#1a2b4a] to-[#7d1935] text-white text-center py-3">
+                  <p className="text-xs uppercase tracking-widest opacity-80">Dumaguete Mission School</p>
+                  <p className="text-[10px] opacity-70">{schoolYear}</p>
+                </div>
+                <div className="p-5 flex flex-col items-center text-center">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] flex items-center justify-center text-white text-2xl font-bold mb-3">
+                    {previewStudent.name.split(' ').map(n => n[0]).slice(0, 2).join('')}
+                  </div>
+                  <p className="font-bold text-[#1a2b4a] text-lg leading-tight">{previewStudent.name}</p>
+                  <p className="text-sm text-[#6b6456]">{previewStudent.grade} — {previewStudent.section}</p>
+                  <p className="mt-2 font-mono text-xs text-[#8b8476]">{previewStudent.id}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { printOne(previewStudent.id); setShowPreviewModal(false); }}
+                className="w-full mt-4 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all"
+              >
+                <Printer className="w-4 h-4" /> {previewStudent.idPrinted ? 'Redownload ID' : 'Download ID'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Student Modal */}
+      {showEditStudentModal && editingStudent && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+            <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-2"><Edit className="w-5 h-5" /><h2 className="text-lg font-semibold">Edit Student Information</h2></div>
+              <button onClick={() => setShowEditStudentModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Full Name</label>
+                  <input type="text" value={editingStudent.name} onChange={e => setEditingStudent({ ...editingStudent, name: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Student ID</label>
+                  <input type="text" value={editingStudent.id} disabled className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 font-mono" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Section</label>
+                  <select value={editingStudent.section} onChange={e => setEditingStudent({ ...editingStudent, section: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                    {['Section A','Section B','Section C'].map(s => <option key={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Grade Level</label>
+                  <select value={editingStudent.grade} onChange={e => setEditingStudent({ ...editingStudent, grade: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]">
+                    {gradeOrder.map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3 pt-2 border-t border-gray-200">
+                <button onClick={() => setShowEditStudentModal(false)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={() => {
+                  setIdStudents(prev => prev.map(e => e.id === editingStudent.id ? editingStudent : e));
+                  setShowEditStudentModal(false);
+                }} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl font-medium hover:shadow-lg transition-all">Save Changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Financial Section
+function FinancialSection({ schoolYear, tuitionFee = 140000, onTuitionFeeChange }: { schoolYear: string; tuitionFee?: number; onTuitionFeeChange?: (fee: number) => void }) {
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [feeInput, setFeeInput] = useState(String(tuitionFee));
+  const [feeSaved, setFeeSaved] = useState(false);
+
+  const handleSaveFee = () => {
+    const parsed = parseInt(feeInput.replace(/,/g, ''), 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      onTuitionFeeChange?.(parsed);
+      setFeeSaved(true);
+      setTimeout(() => setFeeSaved(false), 3000);
+    }
+  };
+  const [reportType, setReportType] = useState('collection-summary');
+  const [dateRange, setDateRange] = useState('current-year');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [reportFormat, setReportFormat] = useState('pdf');
+  const [showReportPreview, setShowReportPreview] = useState(false);
+  
+  const totalRevenue = schoolYear === '2025-2026' ? 45780000 : 43250000;
+  const pendingPayments = schoolYear === '2025-2026' ? 3200000 : 3000000;
+
+  const reportTypes = [
+    { value: 'collection-summary', label: 'Collection Summary Report', description: 'Overall payment collection summary' },
+    { value: 'outstanding-payments', label: 'Outstanding Payments Report', description: 'List of pending and overdue payments' },
+    { value: 'payment-history', label: 'Payment History Report', description: 'Detailed payment transaction history' },
+    { value: 'scholarship-report', label: 'Scholarship Report', description: 'Scholarship students and amounts' }
+  ];
+  
+  const handleGenerateReport = () => {
+    setShowReportPreview(true);
+  };
+  
+  const handleDownloadReport = () => {
+    // Simulate download
+    alert(`Downloading ${reportTypes.find(r => r.value === reportType)?.label} as ${reportFormat.toUpperCase()}...`);
+  };
+  
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Financial Overview</h1>
+          <p className="text-[#6b6456]">Track tuition payments and school finances</p>
+        </div>
+        <button
+          onClick={() => setShowReportModal(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-colors"
+        >
+          <FileCheck className="w-4 h-4" />
+          Generate Report
+        </button>
+      </div>
+
+      {/* Tuition Fee Configuration */}
+      <div className="bg-white rounded-xl shadow-sm border-2 border-[#c9a961]/40 p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-[#c9a961]/10 rounded-xl flex items-center justify-center">
+            <DollarSign className="w-5 h-5 text-[#c9a961]" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-[#1a2b4a]">Tuition Fee Configuration</h3>
+            <p className="text-sm text-[#6b6456]">Adjust the annual tuition fee — changes reflect immediately in the Cashier portal</p>
+          </div>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-4 items-start">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Annual Tuition Fee (PHP)</label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8b8476] font-medium">₱</span>
+              <input type="number" value={feeInput} onChange={e => { setFeeInput(e.target.value); setFeeSaved(false); }}
+                className="w-full pl-8 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-lg font-semibold"
+                min="0" step="1000" />
+            </div>
+            <p className="text-xs text-[#8b8476] mt-1">Current: <strong className="text-[#c9a961]">₱{tuitionFee.toLocaleString()}</strong> per school year</p>
+          </div>
+          <div className="flex items-end gap-2 pb-6">
+            <button onClick={handleSaveFee} className="px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl font-semibold hover:shadow-lg transition-all">
+              Save Changes
+            </button>
+          </div>
+        </div>
+        {feeSaved && (
+          <div className="mt-2 flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+            <CheckCircle className="w-4 h-4 shrink-0" />
+            Tuition fee updated to ₱{parseInt(feeInput).toLocaleString()}. Cashier portal reflects this change.
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <DollarSign className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-[#2c2c2c]">₱{totalRevenue.toLocaleString()}</p>
+              <p className="text-xs text-[#8b8476]">Total Collected</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
+              <Clock className="w-5 h-5 text-yellow-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-[#2c2c2c]">₱{pendingPayments.toLocaleString()}</p>
+              <p className="text-xs text-[#8b8476]">Pending Payments</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+              <Award className="w-5 h-5 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-[#2c2c2c]">152</p>
+              <p className="text-xs text-[#8b8476]">Scholarship Students</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Payment Status Distribution</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+            <p className="text-sm text-green-800 mb-1">Fully Paid</p>
+            <p className="text-2xl font-bold text-green-900">892 students</p>
+          </div>
+          <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+            <p className="text-sm text-yellow-800 mb-1">Partial Payment</p>
+            <p className="text-2xl font-bold text-yellow-900">243 students</p>
+          </div>
+          <div className="p-4 bg-red-50 rounded-lg border border-red-200">
+            <p className="text-sm text-red-800 mb-1">Overdue</p>
+            <p className="text-2xl font-bold text-red-900">112 students</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent Transactions */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 className="font-semibold text-[#1a2b4a]">Recent Transactions</h3>
+            <span className="text-xs text-[#8b8476]">Latest 5</span>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {[
+              { name: 'Maria Santos', grade: 'Grade 5', amount: 14000, method: 'GCash', date: 'Today, 9:14 AM' },
+              { name: 'John Carlo Rivera', grade: 'Grade 4', amount: 25000, method: 'Bank Transfer', date: 'Today, 8:02 AM' },
+              { name: 'Sarah Mae Lopez', grade: 'Grade 6', amount: 7000, method: 'Cash', date: 'Yesterday, 3:47 PM' },
+              { name: 'Patricia Dela Cruz', grade: 'Grade 3', amount: 14000, method: 'GCash', date: 'Yesterday, 1:12 PM' },
+              { name: 'Jose Miguel Abad', grade: 'Grade 6', amount: 20000, method: 'Cash', date: 'Mar 5, 2026' },
+            ].map((t, i) => (
+              <div key={i} className="px-6 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-[#2c2c2c]">{t.name}</p>
+                  <p className="text-xs text-[#8b8476]">{t.grade} • {t.method} • {t.date}</p>
+                </div>
+                <span className="text-sm font-semibold text-green-700">+₱{t.amount.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Overdue Accounts */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 className="font-semibold text-[#1a2b4a]">Overdue Accounts</h3>
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-600"><AlertCircle className="w-3.5 h-3.5" /> Needs follow-up</span>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {[
+              { name: 'Carlo Bautista', grade: 'Grade 2', balance: 42000, daysOverdue: 34 },
+              { name: 'Anna Gabrielle Torres', grade: 'Grade 4', balance: 18500, daysOverdue: 21 },
+              { name: 'Marco Villanueva', grade: 'Grade 1', balance: 63000, daysOverdue: 45 },
+              { name: 'Diana Reyes', grade: 'Grade 5', balance: 9800, daysOverdue: 12 },
+            ].map((t, i) => (
+              <div key={i} className="px-6 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-[#2c2c2c]">{t.name}</p>
+                  <p className="text-xs text-[#8b8476]">{t.grade} • {t.daysOverdue} days overdue</p>
+                </div>
+                <span className="text-sm font-semibold text-red-600">₱{t.balance.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Expenses Snapshot */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Expense Overview (This Month)</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            { label: 'Payroll', amount: 2450000, color: 'text-[#1a2b4a]' },
+            { label: 'Utilities', amount: 185000, color: 'text-[#1a2b4a]' },
+            { label: 'Supplies & Materials', amount: 96000, color: 'text-[#1a2b4a]' },
+            { label: 'Maintenance', amount: 62000, color: 'text-[#1a2b4a]' },
+          ].map(e => (
+            <div key={e.label} className="p-4 bg-[#faf8f5] rounded-lg">
+              <p className="text-xs text-[#8b8476] mb-1">{e.label}</p>
+              <p className={`text-lg font-bold ${e.color}`}>₱{e.amount.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Generate Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#7d1935] text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-bold">Generate Financial Report</h2>
+                  <p className="text-sm text-white/80 mt-1">Select report parameters and preferences</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowReportModal(false);
+                    setShowReportPreview(false);
+                  }}
+                  className="text-white/80 hover:text-white transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Report Type Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">Report Type</label>
+                <div className="space-y-2">
+                  {reportTypes.map((type) => (
+                    <div
+                      key={type.value}
+                      onClick={() => setReportType(type.value)}
+                      className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                        reportType === type.value
+                          ? 'border-[#c9a961] bg-[#c9a961]/5'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`w-5 h-5 rounded-full border-2 mt-0.5 flex items-center justify-center ${
+                          reportType === type.value ? 'border-[#c9a961]' : 'border-gray-300'
+                        }`}>
+                          {reportType === type.value && (
+                            <div className="w-3 h-3 rounded-full bg-[#c9a961]"></div>
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-semibold text-[#2c2c2c]">{type.label}</p>
+                          <p className="text-sm text-[#8b8476] mt-0.5">{type.description}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Date Range Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">Date Range</label>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <button
+                    onClick={() => setDateRange('current-year')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                      dateRange === 'current-year'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    Current School Year
+                  </button>
+                  <button
+                    onClick={() => setDateRange('last-quarter')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                      dateRange === 'last-quarter'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    Last Quarter
+                  </button>
+                  <button
+                    onClick={() => setDateRange('last-month')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                      dateRange === 'last-month'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    Last Month
+                  </button>
+                  <button
+                    onClick={() => setDateRange('custom')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                      dateRange === 'custom'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    Custom Range
+                  </button>
+                </div>
+                
+                {dateRange === 'custom' && (
+                  <div className="grid grid-cols-2 gap-3 p-4 bg-gray-50 rounded-lg">
+                    <div>
+                      <label className="block text-xs font-medium text-[#6b6456] mb-2">Start Date</label>
+                      <input
+                        type="date"
+                        value={customStartDate}
+                        onChange={(e) => setCustomStartDate(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[#6b6456] mb-2">End Date</label>
+                      <input
+                        type="date"
+                        value={customEndDate}
+                        onChange={(e) => setCustomEndDate(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Report Format */}
+              <div>
+                <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">Export Format</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setReportFormat('pdf')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all flex items-center justify-center gap-2 ${
+                      reportFormat === 'pdf'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    <FileCheck className="w-4 h-4" />
+                    PDF Document
+                  </button>
+                  <button
+                    onClick={() => setReportFormat('excel')}
+                    className={`px-4 py-3 rounded-lg border-2 font-medium transition-all flex items-center justify-center gap-2 ${
+                      reportFormat === 'excel'
+                        ? 'border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]'
+                        : 'border-gray-200 text-[#6b6456] hover:border-gray-300'
+                    }`}
+                  >
+                    <Download className="w-4 h-4" />
+                    Excel Spreadsheet
+                  </button>
+                </div>
+              </div>
+
+              {/* Report Preview (if generated) */}
+              {showReportPreview && (
+                <div className="border-2 border-[#c9a961] rounded-lg p-6 bg-[#c9a961]/5">
+                  <div className="flex items-center gap-3 mb-4">
+                    <CheckCircle className="w-6 h-6 text-green-600" />
+                    <div>
+                      <h3 className="font-semibold text-[#1a2b4a]">Report Preview</h3>
+                      <p className="text-sm text-[#6b6456]">
+                        {reportTypes.find(r => r.value === reportType)?.label}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white rounded-lg p-4 space-y-3 border border-gray-200">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#6b6456]">Report Type:</span>
+                      <span className="font-semibold text-[#2c2c2c]">
+                        {reportTypes.find(r => r.value === reportType)?.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#6b6456]">Date Range:</span>
+                      <span className="font-semibold text-[#2c2c2c]">
+                        {dateRange === 'custom' 
+                          ? `${customStartDate || 'N/A'} to ${customEndDate || 'N/A'}` 
+                          : dateRange.replace('-', ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#6b6456]">School Year:</span>
+                      <span className="font-semibold text-[#2c2c2c]">{schoolYear}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#6b6456]">Format:</span>
+                      <span className="font-semibold text-[#2c2c2c]">{reportFormat.toUpperCase()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[#6b6456]">Generated:</span>
+                      <span className="font-semibold text-[#2c2c2c]">
+                        {new Date().toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric', 
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="sticky bottom-0 bg-gray-50 px-6 py-4 rounded-b-2xl flex items-center justify-end gap-3 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowReportModal(false);
+                  setShowReportPreview(false);
+                }}
+                className="px-6 py-2.5 border border-gray-300 text-[#6b6456] rounded-lg hover:bg-gray-100 transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              {!showReportPreview ? (
+                <button
+                  onClick={handleGenerateReport}
+                  className="px-6 py-2.5 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-colors font-medium flex items-center gap-2"
+                >
+                  <Eye className="w-4 h-4" />
+                  Preview Report
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setShowReportPreview(false)}
+                    className="px-6 py-2.5 border border-gray-300 text-[#6b6456] rounded-lg hover:bg-gray-100 transition-colors font-medium"
+                  >
+                    Edit Parameters
+                  </button>
+                  <button
+                    onClick={handleDownloadReport}
+                    className="px-6 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:opacity-90 transition-opacity font-medium flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download {reportFormat.toUpperCase()}
+                  </button>
+                  <button
+                    onClick={() => {
+                      alert('Opening print dialog...');
+                    }}
+                    className="px-6 py-2.5 bg-[#c9a961] text-white rounded-lg hover:bg-[#d4af37] transition-colors font-medium flex items-center gap-2"
+                  >
+                    <Printer className="w-4 h-4" />
+                    Print
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Settings Section //
+function SettingsSection({ tuitionFee, onTuitionFeeChange }: { tuitionFee?: number; onTuitionFeeChange?: (fee: number) => void }) {
+  const [prefs, setPrefs] = useState({
+    emailNotifications: true,
+    autoBackup: true,
+    twoFactor: false,
+    /* smsAlerts: false, */
+    parentPortalAccess: true,
+    lateFeeAutoCalc: true,
+  });
+  const togglePref = (key: keyof typeof prefs) => setPrefs(p => ({ ...p, [key]: !p[key] }));
+
+  const [roles, setRoles] = useState([
+    { name: 'Full Admin', users: 2, access: 'All modules — students, staff, finances, settings' },
+    { name: 'Registrar', users: 3, access: 'Student records, class schedules, faculty applications' },
+    { name: 'Cashier', users: 2, access: 'Tuition payments and financial transactions only' },
+    { name: 'Teacher', users: 45, access: 'Own class rosters, grades, and attendance' },
+  ]);
+
+  const [backupSaved, setBackupSaved] = useState(false);
+  const runBackupNow = () => { setBackupSaved(true); setTimeout(() => setBackupSaved(false), 3000); };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">System Settings</h1>
+        <p className="text-[#6b6456]">Configure system preferences, school information, access, and data</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* School Information */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">School Information</h3>
+          <div className="space-y-4">
+            {[
+              { label: 'School Name', value: 'Dumaguete Mission School' },
+              { label: 'School Motto', value: 'Christian Truth, Shaping Lives...' },
+              { label: 'Academic Year', value: '2025-2026' },
+              { label: 'School Address', value: 'Dumaguete City, Negros Oriental' },
+              { label: 'Contact Email', value: 'admin@dumaguete-mission.edu' },
+              { label: 'Contact Phone', value: '+63 35 123 4567' },
+            ].map(f => (
+              <div key={f.label}>
+                <label className="block text-sm font-medium text-[#6b6456] mb-2">{f.label}</label>
+                <input type="text" defaultValue={f.value} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+              </div>
+            ))}
+            <button className="w-full px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all">Save School Info</button>
+          </div>
+        </div>
+
+        {/* System Preferences */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">System Preferences</h3>
+          <div className="space-y-4">
+            {([
+              { key: 'emailNotifications', label: 'Email Notifications', desc: 'Receive system notifications via email' },
+              /* { key: 'smsAlerts', label: 'SMS Alerts', desc: 'Send SMS alerts to parents for urgent notices' }, */
+              { key: 'autoBackup', label: 'Auto Backup', desc: 'Automatic daily data backup' },
+              { key: 'twoFactor', label: 'Two-Factor Authentication', desc: 'Enhanced security for admin access' },
+              { key: 'parentPortalAccess', label: 'Parent Portal Access', desc: 'Allow parents to view grades and balances online' },
+              { key: 'lateFeeAutoCalc', label: 'Auto-Calculate Late Fees', desc: 'Automatically apply late fees to overdue tuition' },
+            ] as const).map(pref => (
+              <div key={pref.key} className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-[#2c2c2c]">{pref.label}</p>
+                  <p className="text-sm text-[#8b8476]">{pref.desc}</p>
+                </div>
+                <button onClick={() => togglePref(pref.key)} className={`w-12 h-6 rounded-full relative shrink-0 transition-colors ${prefs[pref.key] ? 'bg-[#c9a961]' : 'bg-gray-300'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all ${prefs[pref.key] ? 'right-0.5' : 'left-0.5'}`}></div>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* User Roles & Access */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Shield className="w-5 h-5 text-[#1a2b4a]" />
+            <h3 className="text-lg font-semibold text-[#1a2b4a]">User Roles & Access</h3>
+          </div>
+          <div className="space-y-3">
+            {roles.map(r => (
+              <div key={r.name} className="flex items-start justify-between p-3 bg-[#faf8f5] rounded-lg">
+                <div>
+                  <p className="font-medium text-[#2c2c2c]">{r.name}</p>
+                  <p className="text-xs text-[#8b8476] mt-0.5">{r.access}</p>
+                </div>
+                <span className="shrink-0 text-xs font-semibold px-2.5 py-1 rounded-full bg-[#1a2b4a]/10 text-[#1a2b4a]">{r.users} user{r.users !== 1 ? 's' : ''}</span>
+              </div>
+            ))}
+          </div>
+          <button className="w-full mt-4 flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-[#1a2b4a] text-[#1a2b4a] rounded-lg font-medium hover:bg-[#faf8f5] transition-all">
+            <UserPlus className="w-4 h-4" /> Manage Admin Accounts
+          </button>
+        </div>
+
+        {/* Data Management */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Archive className="w-5 h-5 text-[#1a2b4a]" />
+            <h3 className="text-lg font-semibold text-[#1a2b4a]">Data Management</h3>
+          </div>
+          <div className="space-y-3">
+            <div className="p-3 bg-[#faf8f5] rounded-lg">
+              <p className="text-sm text-[#6b6456]">Last backup: <strong className="text-[#2c2c2c]">Today, 3:00 AM</strong></p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button onClick={runBackupNow} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all">
+                <Archive className="w-4 h-4" /> Backup Now
+              </button>
+              <button className="flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-gray-200 text-[#2c2c2c] rounded-lg font-medium hover:border-[#c9a961] transition-all">
+                <Download className="w-4 h-4" /> Export All Data
+              </button>
+            </div>
+            {backupSaved && (
+              <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+                <CheckCircle className="w-4 h-4 shrink-0" /> Backup completed successfully.
+              </div>
+            )}
+            <p className="text-xs text-[#8b8476]">Exports include student records, employee records, financial transactions, and class assignments.</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Academic Calendar / Grading */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Academic Configuration</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Grading Period</label>
+            <select defaultValue="Quarterly" className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20">
+              <option>Quarterly</option>
+              <option>Semestral</option>
+              <option>Trimestral</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">Passing Grade</label>
+            <input type="number" defaultValue={75} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[#6b6456] mb-2">School Year Start</label>
+            <input type="date" defaultValue="2025-08-01" className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Academics / Schedule Section
+const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function AcademicsSection({ schoolYear }: { schoolYear: string }) {
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEventModal, setShowEventModal] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  type Schedule = { id: number; grade: string; section: string; subject: string; teacher: string; days: string[]; time: string; room: string };
+  const [schedules, setSchedules] = useState<Schedule[]>([
+    { id: 1, grade: 'Grade 1', section: 'Section A', subject: 'Mathematics', teacher: 'Ms. Ana Reyes', days: ['Mon', 'Wed', 'Fri'], time: '7:30 AM – 8:30 AM', room: '101' },
+    { id: 2, grade: 'Grade 2', section: 'Section B', subject: 'English', teacher: 'Mr. Jose Cruz', days: ['Tue', 'Thu'], time: '8:45 AM – 9:45 AM', room: '102' },
+    { id: 3, grade: 'Grade 3', section: 'Section A', subject: 'Science', teacher: 'Mrs. Grace Santos', days: ['Mon', 'Wed', 'Fri'], time: '10:00 AM – 11:00 AM', room: '203' },
+    { id: 4, grade: 'Grade 4', section: 'Section A', subject: 'Filipino', teacher: 'Ms. Luz Flores', days: ['Mon', 'Wed', 'Fri'], time: '1:00 PM – 2:00 PM', room: '205' },
+    { id: 5, grade: 'Grade 5', section: 'Section B', subject: 'History', teacher: 'Mr. Ramon dela Cruz', days: ['Tue', 'Thu'], time: '2:15 PM – 3:15 PM', room: '301' },
+    { id: 6, grade: 'Grade 6', section: 'Section A', subject: 'Religion', teacher: 'Fr. Michael Santos', days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'], time: '7:00 AM – 7:30 AM', room: 'Chapel' },
+  ]);
+
+  type EventItem = { id: number; title: string; type: string; date: string; location: string; audience: string };
+  const [events, setEvents] = useState<EventItem[]>([
+    { id: 1, title: 'School Mass', type: 'Religious/Spiritual', date: 'Mar 20, 2026', location: 'Chapel', audience: 'All Grades' },
+    { id: 2, title: 'Quarter 3 Exams', type: 'Academic', date: 'Mar 15-19, 2026', location: 'Classrooms', audience: 'All Grades' },
+    { id: 3, title: 'Parent-Teacher Conference', type: 'Parent Meeting', date: 'Mar 25, 2026', location: 'Gymnasium', audience: 'All Parents' },
+  ]);
+
+  const emptyForm = { grade: 'Grade 1', section: '', subject: '', teacher: '', days: [] as string[], time: '', room: '' };
+  const [form, setForm] = useState(emptyForm);
+
+  const emptyEvent = { title: '', type: '', date: '', location: '', audience: 'All Grades' };
+  const [eventForm, setEventForm] = useState(emptyEvent);
+
+  const grades = ['Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6'];
+
+  const toggleDay = (day: string) => {
+    setForm(f => ({
+      ...f,
+      days: f.days.includes(day) ? f.days.filter(d => d !== day) : [...f.days, day]
+    }));
+  };
+
+  const handleOpen = (schedule?: Schedule) => {
+    if (schedule) {
+      setForm({ grade: schedule.grade, section: schedule.section, subject: schedule.subject, teacher: schedule.teacher, days: [...schedule.days], time: schedule.time, room: schedule.room });
+      setEditingId(schedule.id);
+    } else {
+      setForm(emptyForm);
+      setEditingId(null);
+    }
+    setShowCreateModal(true);
+  };
+
+  const handleSave = () => {
+    if (!form.section || !form.subject || !form.teacher || form.days.length === 0 || !form.time || !form.room) return;
+    if (editingId !== null) {
+      setSchedules(prev => prev.map(s => s.id === editingId ? { ...s, ...form, days: form.days } : s));
+    } else {
+      setSchedules(prev => [...prev, { id: Date.now(), ...form }]);
+    }
+    setShowCreateModal(false);
+  };
+
+  const handleDelete = (id: number) => {
+    setSchedules(prev => prev.filter(s => s.id !== id));
+  };
+
+  const handleSaveEvent = () => {
+    if (!eventForm.title || !eventForm.type || !eventForm.date || !eventForm.location) return;
+    setEvents(prev => [...prev, { id: Date.now(), ...eventForm }]);
+    setEventForm(emptyEvent);
+    setShowEventModal(false);
+  };
+
+  const handleDeleteEvent = (id: number) => {
+    setEvents(prev => prev.filter(e => e.id !== id));
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">Schedule & Classes</h1>
+          <p className="text-[#6b6456]">Manage class schedules and school events • {schoolYear}</p>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setShowEventModal(true)}
+            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl hover:shadow-lg transition-all font-medium"
+          >
+            <Calendar className="w-5 h-5" />
+            <span>Create Event</span>
+          </button>
+          <button
+            onClick={() => handleOpen()}
+            className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl hover:shadow-lg transition-all font-medium"
+          >
+            <UserPlus className="w-5 h-5" />
+            <span>Create Schedule</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Schedule Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-[#1a2b4a]">Class Schedules</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-[#faf8f5] border-b border-gray-200">
+              <tr>
+                {['Grade', 'Section', 'Subject', 'Teacher', 'Days', 'Time', 'Room', 'Actions'].map(h => (
+                  <th key={h} className=" px-5 py-4 text-sm font-semibold text-[#1a2b4a]">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {schedules.map(s => (
+                <tr key={s.id} className="hover:bg-[#faf8f5] transition-colors">
+                  <td className="px-5 py-4 text-sm font-medium text-[#2c2c2c]">{s.grade}</td>
+                  <td className="px-5 py-4 text-sm text-[#6b6456]">{s.section}</td>
+                  <td className="px-5 py-4 text-sm font-medium text-[#1a2b4a]">{s.subject}</td>
+                  <td className="px-5 py-4 text-sm text-[#6b6456]">{s.teacher}</td>
+                  <td className="px-5 py-4">
+                    <div className="flex flex-wrap gap-1">
+                      {WEEK_DAYS.map(d => (
+                        <span key={d} className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.days.includes(d) ? 'bg-[#1a2b4a] text-white' : 'bg-gray-100 text-gray-400'}`}>{d}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-[#6b6456] whitespace-nowrap">{s.time}</td>
+                  <td className="px-5 py-4 text-sm text-[#6b6456]">{s.room}</td>
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => handleOpen(s)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Edit">
+                        <Edit className="w-4 h-4 text-[#8b8476]" />
+                      </button>
+                      <button onClick={() => handleDelete(s.id)} className="p-2 hover:bg-red-50 rounded-lg transition-colors" title="Delete">
+                        <Trash2 className="w-4 h-4 text-red-400" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Events List */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-[#1a2b4a]">Upcoming School Events</h3>
+        </div>
+        <div className="divide-y divide-gray-200">
+          {events.map(ev => (
+            <div key={ev.id} className="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#faf8f5] transition-colors">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 bg-[#c9a961]/10 rounded-lg flex items-center justify-center shrink-0">
+                  <Calendar className="w-5 h-5 text-[#c9a961]" />
+                </div>
+                <div>
+                  <p className="font-semibold text-[#1a2b4a]">{ev.title}</p>
+                  <p className="text-sm text-[#6b6456]">{ev.type} • {ev.date} • {ev.location}</p>
+                  <p className="text-xs text-[#8b8476] mt-0.5">Audience: {ev.audience}</p>
+                </div>
+              </div>
+              <button onClick={() => handleDeleteEvent(ev.id)} className="p-2 hover:bg-red-50 rounded-lg transition-colors self-start sm:self-center" title="Remove">
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          ))}
+          {events.length === 0 && (
+            <div className="px-6 py-10 text-center text-[#8b8476] text-sm">No events scheduled yet.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Create Schedule Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white p-6 border-b border-gray-200 flex items-center justify-between rounded-t-2xl">
+              <h3 className="text-xl font-bold text-[#1a2b4a]">{editingId ? 'Edit Schedule' : 'Create Schedule'}</h3>
+              <button onClick={() => setShowCreateModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5 text-[#8b8476]" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Grade Level</label>
+                  <select value={form.grade} onChange={e => setForm(f => ({ ...f, grade: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20">
+                    {grades.map(g => <option key={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Section</label>
+                  <input value={form.section} onChange={e => setForm(f => ({ ...f, section: e.target.value }))} placeholder="e.g. Section A" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Subject</label>
+                  <input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))} placeholder="e.g. Mathematics" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Teacher</label>
+                  <input value={form.teacher} onChange={e => setForm(f => ({ ...f, teacher: e.target.value }))} placeholder="e.g. Mr. Dela Cruz" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+              </div>
+
+              {/* Day checkboxes */}
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-2">Days <span className="text-red-400">*</span></label>
+                <div className="flex gap-2 flex-wrap">
+                  {WEEK_DAYS.map(d => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => toggleDay(d)}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold border-2 transition-all ${
+                        form.days.includes(d)
+                          ? 'bg-[#1a2b4a] border-[#1a2b4a] text-white'
+                          : 'bg-white border-gray-200 text-[#6b6456] hover:border-[#1a2b4a]/40'
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Time</label>
+                  <input value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))} placeholder="e.g. 8:00 AM – 9:00 AM" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[#6b6456] mb-1">Room</label>
+                  <input value={form.room} onChange={e => setForm(f => ({ ...f, room: e.target.value }))} placeholder="e.g. Room 201" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20" />
+                </div>
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button onClick={handleSave} className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all">
+                {editingId ? 'Save Changes' : 'Create Schedule'}
+              </button>
+              <button onClick={() => setShowCreateModal(false)} className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-xl font-medium hover:border-[#c9a961] transition-all">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Event Modal */}
+      {showEventModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Calendar className="w-6 h-6" />
+                <h3 className="text-xl font-semibold">Create School Event</h3>
+              </div>
+              <button onClick={() => setShowEventModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Event Title <span className="text-red-400">*</span></label>
+                <input value={eventForm.title} onChange={e => setEventForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. School Mass" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Event Type <span className="text-red-400">*</span></label>
+                <select value={eventForm.type} onChange={e => setEventForm(f => ({ ...f, type: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20">
+                  <option value="">Select type</option>
+                  <option>Academic</option>
+                  <option>Religious/Spiritual</option>
+                  <option>Sports & Athletics</option>
+                  <option>Cultural</option>
+                  <option>Parent Meeting</option>
+                  <option>Holiday/Break</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Date <span className="text-red-400">*</span></label>
+                <input type="date" value={eventForm.date} onChange={e => setEventForm(f => ({ ...f, date: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Location <span className="text-red-400">*</span></label>
+                <input value={eventForm.location} onChange={e => setEventForm(f => ({ ...f, location: e.target.value }))} placeholder="e.g. Chapel, Gymnasium" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#6b6456] mb-1">Target Audience</label>
+                <select value={eventForm.audience} onChange={e => setEventForm(f => ({ ...f, audience: e.target.value }))} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20">
+                  <option>All Grades</option>
+                  <option>Grade 1</option>
+                  <option>Grade 2</option>
+                  <option>Grade 3</option>
+                  <option>Grade 4</option>
+                  <option>Grade 5</option>
+                  <option>Grade 6</option>
+                  <option>All Parents</option>
+                  <option>All Faculty & Staff</option>
+                </select>
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button onClick={handleSaveEvent} className="flex-1 px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl font-medium hover:shadow-lg transition-all">
+                Create Event
+              </button>
+              <button onClick={() => setShowEventModal(false)} className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-xl font-medium hover:border-[#c9a961] transition-all">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

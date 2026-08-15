@@ -1,0 +1,1278 @@
+// old version parent
+
+import { useState } from 'react';
+import { DashboardLayout } from './DashboardLayout';
+import {
+  LayoutDashboard, Award, GraduationCap, Calendar, Settings, Users,
+  BookOpen, Clock, Target, Activity, MessageSquare, Download,
+  QrCode, UserPlus, X, Plus, Timer, Shield, CheckCircle, AlertCircle,
+  TrendingUp, Mail
+} from 'lucide-react';
+
+interface ParentPortalProps {
+  user: any;
+  onLogout: () => void;
+}
+
+export function ParentPortal({ user, onLogout }: ParentPortalProps) {
+  const [activeView, setActiveView] = useState('overview');
+  const [schoolYear, setSchoolYear] = useState('2025-2026');
+  const [selectedChild, setSelectedChild] = useState('STU2024156');
+
+  // Multiple children data - shared across all views
+  const children = [
+    {
+      id: 'STU2024156',
+      name: 'Sarah Martinez',
+      grade: 'Grade 4, Section A'
+    },
+    {
+      id: 'STU2024157',
+      name: 'Michael Martinez',
+      grade: 'Grade 6, Section B'
+    },
+    {
+      id: 'STU2024158',
+      name: 'Emma Martinez',
+      grade: 'Grade 2, Section A'
+    }
+  ];
+
+  const navigation = [
+    { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'academics', label: 'Academic Progress', icon: Award },
+    { id: 'schedule', label: 'Schedule', icon: Calendar },
+    { id: 'pickup', label: 'Student Pickup', icon: QrCode },
+    { id: 'financials', label: 'Billing & Payments', icon: Settings },
+    /* { id: 'messages', label: 'Messages', icon: MessageSquare } */
+  ];
+
+  return (
+    <DashboardLayout
+      user={user}
+      role="parent"
+      navigation={navigation}
+      activeView={activeView}
+      onViewChange={setActiveView}
+      onLogout={onLogout}
+      schoolYear={schoolYear}
+      onSchoolYearChange={setSchoolYear}
+    >
+      {activeView === 'overview' && <ParentOverview user={user} schoolYear={schoolYear} children={children} selectedChild={selectedChild} setSelectedChild={setSelectedChild} />}
+      {activeView === 'academics' && <AcademicProgress schoolYear={schoolYear} children={children} selectedChild={selectedChild} setSelectedChild={setSelectedChild} />}
+      {activeView === 'schedule' && <ScheduleViewing schoolYear={schoolYear} children={children} selectedChild={selectedChild} setSelectedChild={setSelectedChild} />}
+      {activeView === 'pickup' && <StudentPickup user={user} children={children} />}
+      {activeView === 'financials' && <BillingPayments schoolYear={schoolYear} />}
+      {activeView === 'messages' && <MessagingCenter />}
+    </DashboardLayout>
+  );
+}
+
+// Parent Overview
+function ParentOverview({ user, schoolYear, children, selectedChild, setSelectedChild }: any) {
+  const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
+
+  // Different data based on selected child and school year
+  const getChildData = (childId: string, year: string) => {
+    // Data varies by child
+    const childDataMap: any = {
+      'STU2024156': { // Sarah - Grade 4
+        gpa: year === '2025-2026' ? 92.3 : 89.5,
+        attendance: year === '2025-2026' ? 96 : 94,
+        pendingTasks: 3,
+        balance: 0,
+        recentGrades: [
+          { subject: 'Mathematics', grade: 94, trend: 'up', color: '#1a2b4a' },
+          { subject: 'English', grade: 92, trend: 'stable', color: '#7d1935' },
+          { subject: 'Science', grade: 91, trend: 'up', color: '#c9a961' },
+          { subject: 'History', grade: 93, trend: 'up', color: '#2d4263' }
+        ]
+      },
+      'STU2024157': { // Michael - Grade 6
+        gpa: year === '2025-2026' ? 88.7 : 86.2,
+        attendance: year === '2025-2026' ? 93 : 91,
+        pendingTasks: 5,
+        balance: 0,
+        recentGrades: [
+          { subject: 'Mathematics', grade: 89, trend: 'up', color: '#1a2b4a' },
+          { subject: 'English', grade: 87, trend: 'stable', color: '#7d1935' },
+          { subject: 'Science', grade: 90, trend: 'up', color: '#c9a961' },
+          { subject: 'History', grade: 88, trend: 'down', color: '#2d4263' }
+        ]
+      },
+      'STU2024158': { // Emma - Grade 2
+        gpa: year === '2025-2026' ? 94.5 : 92.1,
+        attendance: year === '2025-2026' ? 98 : 96,
+        pendingTasks: 2,
+        balance: 0,
+        recentGrades: [
+          { subject: 'Mathematics', grade: 95, trend: 'up', color: '#1a2b4a' },
+          { subject: 'English', grade: 94, trend: 'up', color: '#7d1935' },
+          { subject: 'Science', grade: 93, trend: 'stable', color: '#c9a961' },
+          { subject: 'Reading', grade: 96, trend: 'up', color: '#2d4263' }
+        ]
+      }
+    };
+
+    return childDataMap[childId] || childDataMap['STU2024156'];
+  };
+
+  const childData = getChildData(selectedChild, schoolYear);
+
+  const stats = [
+    {
+      label: 'Outstanding Balance',
+      value: '₱0',
+      icon: Settings,
+      color: 'from-[#2d4263] to-[#3e5776]'
+    }
+  ];
+
+  const upcomingEvents = [
+    { date: 'Mar 12', event: 'Parent-Teacher Conference', time: '2:00 PM', type: 'meeting' },
+    { date: 'Mar 15', event: 'Quarter 3 Exams Begin', time: 'All Day', type: 'exam' },
+    { date: 'Mar 20', event: 'School Mass', time: '9:00 AM', type: 'event' },
+    { date: 'Mar 25', event: 'Report Card Release', time: 'TBD', type: 'academic' }
+  ];
+
+  const recentActivity = [
+    { id: 1, type: 'grade', message: `New grade posted for Mathematics - ${childData.recentGrades[0].grade}`, time: '2 hours ago' },
+    { id: 2, type: 'assignment', message: 'Assignment submitted: English Essay', time: '1 day ago' },
+    { id: 3, type: 'attendance', message: 'Marked present for all classes', time: '1 day ago' },
+    { id: 4, type: 'message', message: 'New message from Mr. Davidson', time: '2 days ago' }
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Welcome Banner with Child Info */}
+      <div className="bg-[#1a5c38] rounded-xl p-8 text-white">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">Welcome, {user.name.split(' ')[0]}!</h1>
+            <p className="text-white/90 mb-4">Monitor your child's academic journey</p>
+            <div className="flex items-center gap-6 text-sm">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                <span>{childInfo.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-4 h-4" />
+                <span>{childInfo.grade}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Award className="w-4 h-4" />
+                <span>GPA: {childData.gpa}</span>
+              </div>
+            </div>
+          </div>
+          <div className="w-20 h-20 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl font-bold">
+            {childInfo.name.split(' ').map((n: string) => n[0]).join('')}
+          </div>
+        </div>
+      </div>
+
+      {/* Child Selection Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">
+          Select Child
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {children.map((child: any) => (
+            <button
+              key={child.id}
+              onClick={() => setSelectedChild(child.id)}
+              className={`p-4 rounded-xl border-2 transition-all text-left ${
+                selectedChild === child.id
+                  ? 'border-[#c9a961] bg-[#c9a961]/5 shadow-md'
+                  : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
+                  selectedChild === child.id 
+                    ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
+                    : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
+                }`}>
+                  {child.name.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
+                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                </div>
+                {selectedChild === child.id && (
+                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-6">
+        {stats.map((stat, index) => {
+          const Icon = stat.icon;
+          return (
+            <div key={index} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-lg transition-all">
+              <div className="flex items-start justify-between mb-4">
+                <div className={`w-12 h-12 bg-gradient-to-br ${stat.color} rounded-lg flex items-center justify-center`}>
+                  <Icon className="w-6 h-6 text-white" />
+                </div>
+              </div>
+              <h3 className="text-2xl font-bold text-[#2c2c2c] mb-1">{stat.value}</h3>
+              <p className="text-sm text-[#8b8476]">{stat.label}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Recent Grades */}
+        {/* <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-[#1a2b4a]">Recent Subject Grades</h3>
+            <button className="text-sm text-[#c9a961] hover:text-[#b8994f] font-medium">
+              View All Grades
+            </button>
+          </div>
+          <div className="space-y-4">
+            {childData.recentGrades.map((subject: any, index: number) => (
+              <div key={index} className="flex items-center gap-4 p-4 bg-[#faf8f5] rounded-lg border border-gray-200">
+                <div 
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: subject.color }}
+                ></div>
+                <div className="flex-1">
+                  <p className="font-semibold text-[#1a2b4a]">{subject.subject}</p>
+                  <p className="text-xs text-[#8b8476]">Quarter 3</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl font-bold text-[#c9a961]">{subject.grade}</span>
+                  {subject.trend === 'up' && <Award className="w-5 h-5 text-green-600" />}
+                  {subject.trend === 'stable' && <Activity className="w-5 h-5 text-blue-600" />}
+                  {subject.trend === 'down' && <Activity className="w-5 h-5 text-orange-600" />}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div> */}
+
+        {/* Recent Activity */}
+        {/* <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <h3 className="text-lg font-semibold text-[#1a2b4a] mb-6">Recent Activity</h3>
+          <div className="space-y-4">
+            {recentActivity.map((activity) => (
+              <div key={activity.id} className="flex items-start gap-3 pb-4 border-b border-gray-100 last:border-0">
+                <div className="w-8 h-8 bg-[#c9a961]/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <div className="w-2 h-2 bg-[#c9a961] rounded-full"></div>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm text-[#2c2c2c] mb-1">{activity.message}</p>
+                  <p className="text-xs text-[#8b8476]">{activity.time}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div> */}
+      </div>
+
+      {/* Upcoming Events */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-6">Upcoming Events</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {upcomingEvents.map((event, index) => (
+            <div key={index} className="p-4 border-l-4 border-[#c9a961] bg-[#faf8f5] rounded">
+              <p className="text-sm font-semibold text-[#c9a961] mb-2">{event.date}</p>
+              <p className="text-sm font-medium text-[#2c2c2c] mb-1">{event.event}</p>
+              <p className="text-xs text-[#8b8476]">{event.time}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Academic Progress Section
+function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChild }: any) {
+  const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
+
+  // Get child-specific data based on selected child and school year
+  const getGradeData = (childId: string, year: string) => {
+    const dataMap: any = {
+      'STU2024156': year === '2025-2026' ? {
+        currentGPA: 92.3,
+        gpaChange: '+3.2%',
+        classRank: 5,
+        rankText: 'Top 15% of class',
+        subjectsAbove90: '6/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 92, q2: 93, q3: 94, q4: 95, final: 93.5, teacher: 'Mr. Davidson' },
+          { subject: 'English', q1: 90, q2: 91, q3: 92, q4: 93, final: 91.5, teacher: 'Ms. Cruz' },
+          { subject: 'Science', q1: 89, q2: 90, q3: 91, q4: 92, final: 90.5, teacher: 'Mrs. Reyes' },
+          { subject: 'History', q1: 91, q2: 92, q3: 93, q4: 94, final: 92.5, teacher: 'Mr. Santos' },
+          { subject: 'Filipino', q1: 88, q2: 89, q3: 90, q4: 91, final: 89.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 94, q2: 95, q3: 95, q4: 96, final: 95.0, teacher: 'Fr. Michael' }
+        ]
+      } : {
+        currentGPA: 89.5,
+        gpaChange: '+2.1%',
+        classRank: 8,
+        rankText: 'Top 20% of class',
+        subjectsAbove90: '4/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 88, q2: 89, q3: 90, q4: 91, final: 89.5, teacher: 'Mr. Davidson' },
+          { subject: 'English', q1: 87, q2: 88, q3: 89, q4: 90, final: 88.5, teacher: 'Ms. Cruz' },
+          { subject: 'Science', q1: 86, q2: 87, q3: 88, q4: 89, final: 87.5, teacher: 'Mrs. Reyes' },
+          { subject: 'History', q1: 89, q2: 90, q3: 91, q4: 92, final: 90.5, teacher: 'Mr. Santos' },
+          { subject: 'Filipino', q1: 85, q2: 86, q3: 87, q4: 88, final: 86.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 92, q2: 93, q3: 94, q4: 95, final: 93.5, teacher: 'Fr. Michael' }
+        ]
+      },
+      'STU2024157': year === '2025-2026' ? {
+        currentGPA: 88.7,
+        gpaChange: '+2.5%',
+        classRank: 12,
+        rankText: 'Top 25% of class',
+        subjectsAbove90: '3/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 88, q2: 89, q3: 89, q4: 90, final: 89.0, teacher: 'Mrs. Johnson' },
+          { subject: 'English', q1: 86, q2: 87, q3: 88, q4: 88, final: 87.3, teacher: 'Mr. Brown' },
+          { subject: 'Science', q1: 89, q2: 90, q3: 91, q4: 91, final: 90.3, teacher: 'Dr. Lee' },
+          { subject: 'History', q1: 87, q2: 88, q3: 87, q4: 89, final: 87.8, teacher: 'Ms. Torres' },
+          { subject: 'Filipino', q1: 85, q2: 86, q3: 87, q4: 88, final: 86.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 92, q2: 93, q3: 94, q4: 93, final: 93.0, teacher: 'Fr. Michael' }
+        ]
+      } : {
+        currentGPA: 86.2,
+        gpaChange: '+1.8%',
+        classRank: 15,
+        rankText: 'Top 30% of class',
+        subjectsAbove90: '2/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 85, q2: 86, q3: 87, q4: 88, final: 86.5, teacher: 'Mrs. Johnson' },
+          { subject: 'English', q1: 84, q2: 85, q3: 86, q4: 87, final: 85.5, teacher: 'Mr. Brown' },
+          { subject: 'Science', q1: 86, q2: 87, q3: 88, q4: 89, final: 87.5, teacher: 'Dr. Lee' },
+          { subject: 'History', q1: 84, q2: 85, q3: 86, q4: 87, final: 85.5, teacher: 'Ms. Torres' },
+          { subject: 'Filipino', q1: 82, q2: 83, q3: 84, q4: 85, final: 83.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 90, q2: 91, q3: 92, q4: 91, final: 91.0, teacher: 'Fr. Michael' }
+        ]
+      },
+      'STU2024158': year === '2025-2026' ? {
+        currentGPA: 94.5,
+        gpaChange: '+2.4%',
+        classRank: 2,
+        rankText: 'Top 5% of class',
+        subjectsAbove90: '6/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 94, q2: 95, q3: 95, q4: 96, final: 95.0, teacher: 'Ms. White' },
+          { subject: 'English', q1: 93, q2: 94, q3: 94, q4: 95, final: 94.0, teacher: 'Mrs. Adams' },
+          { subject: 'Science', q1: 92, q2: 93, q3: 94, q4: 94, final: 93.3, teacher: 'Mr. Green' },
+          { subject: 'Reading', q1: 95, q2: 96, q3: 96, q4: 97, final: 96.0, teacher: 'Ms. Carter' },
+          { subject: 'Filipino', q1: 91, q2: 92, q3: 93, q4: 94, final: 92.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 96, q2: 97, q3: 97, q4: 98, final: 97.0, teacher: 'Fr. Michael' }
+        ]
+      } : {
+        currentGPA: 92.1,
+        gpaChange: '+1.9%',
+        classRank: 3,
+        rankText: 'Top 10% of class',
+        subjectsAbove90: '5/6',
+        detailedGrades: [
+          { subject: 'Mathematics', q1: 91, q2: 92, q3: 93, q4: 93, final: 92.3, teacher: 'Ms. White' },
+          { subject: 'English', q1: 90, q2: 91, q3: 92, q4: 92, final: 91.3, teacher: 'Mrs. Adams' },
+          { subject: 'Science', q1: 89, q2: 90, q3: 91, q4: 92, final: 90.5, teacher: 'Mr. Green' },
+          { subject: 'Reading', q1: 93, q2: 94, q3: 94, q4: 95, final: 94.0, teacher: 'Ms. Carter' },
+          { subject: 'Filipino', q1: 88, q2: 89, q3: 90, q4: 91, final: 89.5, teacher: 'Ms. Garcia' },
+          { subject: 'Religion', q1: 94, q2: 95, q3: 95, q4: 96, final: 95.0, teacher: 'Fr. Michael' }
+        ]
+      }
+    };
+
+    return dataMap[childId] || dataMap['STU2024156'];
+  };
+
+  const gradeData = getGradeData(selectedChild, schoolYear);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Academic Progress</h1>
+          <p className="text-[#6b6456]">Monitor your child's academic performance</p>
+        </div>
+        <button className="flex items-center gap-2 px-6 py-3 bg-[#1a5c38] text-white rounded-lg hover:shadow-lg transition-all">
+          <Download className="w-5 h-5" />
+          <span className="font-medium">Download Report</span>
+        </button>
+      </div>
+
+      {/* Child Selection Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">
+          Select Child
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {children.map((child: any) => (
+            <button
+              key={child.id}
+              onClick={() => setSelectedChild(child.id)}
+              className={`p-4 rounded-xl border-2 transition-all text-left ${
+                selectedChild === child.id
+                  ? 'border-[#c9a961] bg-[#c9a961]/5 shadow-md'
+                  : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
+                  selectedChild === child.id 
+                    ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
+                    : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
+                }`}>
+                  {child.name.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
+                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                </div>
+                {selectedChild === child.id && (
+                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Detailed Grades Table */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-[#1a2b4a]">Detailed Grade Report - Academic Year {schoolYear}</h3>
+          <p className="text-sm text-[#6b6456] mt-1">Student: {childInfo.name} ({childInfo.grade})</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-[#faf8f5] border-b border-gray-200">
+              <tr>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Subject</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Teacher</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q1</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q2</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q3</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q4</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Final</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {gradeData.detailedGrades.map((grade: any, index: number) => (
+                <tr key={index} className="hover:bg-[#faf8f5] transition-colors">
+                  <td className="px-6 py-4 font-medium text-[#2c2c2c]">{grade.subject}</td>
+                  <td className="px-6 py-4 text-sm text-[#6b6456]">{grade.teacher}</td>
+                  <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q1}</td>
+                  <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q2}</td>
+                  <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q3}</td>
+                  <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q4}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-[#c9a961]/10 text-[#c9a961]">
+                      {grade.final}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Schedule Viewing
+function ScheduleViewing({ schoolYear, children, selectedChild, setSelectedChild }: any) {
+  const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
+
+  // Get child-specific schedule data
+  const getScheduleData = (childId: string) => {
+    const scheduleMap: any = {
+      'STU2024156': { // Sarah - Grade 4
+        Monday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Mr. Davidson', room: '205' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Cruz', room: '301' },
+          { time: '10:30-11:30', subject: 'Science', teacher: 'Mrs. Reyes', room: '402' },
+          { time: '1:00-2:00', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' }
+        ],
+        Tuesday: [
+          { time: '8:00-9:00', subject: 'History', teacher: 'Mr. Santos', room: '304' },
+          { time: '9:15-10:15', subject: 'Filipino', teacher: 'Ms. Garcia', room: '203' },
+          { time: '10:30-11:30', subject: 'PE', teacher: 'Coach Martinez', room: 'Gym' },
+          { time: '1:00-2:00', subject: 'Music', teacher: 'Ms. Lopez', room: 'Music Room' }
+        ],
+        Wednesday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Mr. Davidson', room: '205' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Cruz', room: '301' },
+          { time: '10:30-11:30', subject: 'Science', teacher: 'Mrs. Reyes', room: '402' }
+        ],
+        Thursday: [
+          { time: '8:00-9:00', subject: 'History', teacher: 'Mr. Santos', room: '304' },
+          { time: '9:15-10:15', subject: 'Filipino', teacher: 'Ms. Garcia', room: '203' },
+          { time: '10:30-11:30', subject: 'Religion', teacher: 'Fr. Michael', room: 'Chapel' }
+        ],
+        Friday: [
+          { time: '8:00-9:00', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' },
+          { time: '9:15-10:15', subject: 'Science', teacher: 'Mrs. Reyes', room: '402' },
+          { time: '10:30-11:30', subject: 'Mathematics', teacher: 'Mr. Davidson', room: '205' },
+          { time: '1:00-2:00', subject: 'Library', teacher: 'Ms. Torres', room: 'Library' }
+        ]
+      },
+      'STU2024157': { // Michael - Grade 6
+        Monday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Dr. Chen', room: '310' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Johnson', room: '405' },
+          { time: '10:30-11:30', subject: 'Science', teacher: 'Mr. Alvarez', room: '408' },
+          { time: '1:00-2:00', subject: 'History', teacher: 'Dr. Rodriguez', room: '308' }
+        ],
+        Tuesday: [
+          { time: '8:00-9:00', subject: 'Filipino', teacher: 'Mr. Cruz', room: '204' },
+          { time: '9:15-10:15', subject: 'PE', teacher: 'Coach Martinez', room: 'Gym' },
+          { time: '10:30-11:30', subject: 'Music', teacher: 'Ms. Lopez', room: 'Music Room' },
+          { time: '1:00-2:00', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' }
+        ],
+        Wednesday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Dr. Chen', room: '310' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Johnson', room: '405' },
+          { time: '10:30-11:30', subject: 'Science', teacher: 'Mr. Alvarez', room: '408' }
+        ],
+        Thursday: [
+          { time: '8:00-9:00', subject: 'History', teacher: 'Dr. Rodriguez', room: '308' },
+          { time: '9:15-10:15', subject: 'Filipino', teacher: 'Mr. Cruz', room: '204' },
+          { time: '10:30-11:30', subject: 'Religion', teacher: 'Fr. Michael', room: 'Chapel' },
+          { time: '1:00-2:00', subject: 'Library', teacher: 'Ms. Torres', room: 'Library' }
+        ],
+        Friday: [
+          { time: '8:00-9:00', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' },
+          { time: '9:15-10:15', subject: 'Science', teacher: 'Mr. Alvarez', room: '408' },
+          { time: '10:30-11:30', subject: 'Mathematics', teacher: 'Dr. Chen', room: '310' }
+        ]
+      },
+      'STU2024158': { // Emma - Grade 2
+        Monday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Mrs. Lee', room: '102' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Anderson', room: '102' },
+          { time: '10:30-11:30', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' }
+        ],
+        Tuesday: [
+          { time: '8:00-9:00', subject: 'Science', teacher: 'Mr. White', room: '105' },
+          { time: '9:15-10:15', subject: 'Music', teacher: 'Ms. Lopez', room: 'Music Room' },
+          { time: '10:30-11:30', subject: 'PE', teacher: 'Coach Martinez', room: 'Gym' }
+        ],
+        Wednesday: [
+          { time: '8:00-9:00', subject: 'Mathematics', teacher: 'Mrs. Lee', room: '102' },
+          { time: '9:15-10:15', subject: 'English', teacher: 'Ms. Anderson', room: '102' },
+          { time: '10:30-11:30', subject: 'Filipino', teacher: 'Ms. Ramos', room: '103' }
+        ],
+        Thursday: [
+          { time: '8:00-9:00', subject: 'History', teacher: 'Mrs. Valdez', room: '102' },
+          { time: '9:15-10:15', subject: 'Religion', teacher: 'Sr. Mary', room: 'Chapel' },
+          { time: '10:30-11:30', subject: 'Library', teacher: 'Ms. Torres', room: 'Library' }
+        ],
+        Friday: [
+          { time: '8:00-9:00', subject: 'Arts', teacher: 'Ms. Flores', room: 'Art Room' },
+          { time: '9:15-10:15', subject: 'Science', teacher: 'Mr. White', room: '105' },
+          { time: '10:30-11:30', subject: 'Mathematics', teacher: 'Mrs. Lee', room: '102' }
+        ]
+      }
+    };
+    
+    return scheduleMap[childId] || scheduleMap['STU2024156'];
+  };
+
+  const schedule = getScheduleData(selectedChild);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Class Schedule</h1>
+        <p className="text-[#6b6456]">View your child's weekly class schedule</p>
+      </div>
+
+      {/* Child Selection Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">
+          Select Child
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {children.map((child: any) => (
+            <button
+              key={child.id}
+              onClick={() => setSelectedChild(child.id)}
+              className={`p-4 rounded-xl border-2 transition-all text-left ${
+                selectedChild === child.id
+                  ? 'border-[#c9a961] bg-[#c9a961]/5 shadow-md'
+                  : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
+                  selectedChild === child.id 
+                    ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
+                    : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
+                }`}>
+                  {child.name.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
+                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                </div>
+                {selectedChild === child.id && (
+                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Schedule Display */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="grid grid-cols-5 gap-px bg-gray-200">
+          {Object.entries(schedule).map(([day, classes]) => (
+            <div key={day} className="bg-white">
+              <div className="bg-[#1a5c38] p-4 text-center">
+                <h3 className="font-semibold text-white">{day}</h3>
+              </div>
+              <div className="p-4 space-y-3">
+                {classes.map((item: any, index: number) => (
+                  <div key={index} className="p-3 bg-[#faf8f5] rounded-lg border border-gray-200">
+                    <p className="text-xs font-semibold text-[#7d1935] mb-2">{item.time}</p>
+                    <p className="text-sm font-medium text-[#1a2b4a] mb-1">{item.subject}</p>
+                    <p className="text-xs text-[#8b8476] mb-1">{item.teacher}</p>
+                    <p className="text-xs text-[#6b6456]">{item.room}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Student Pickup
+function StudentPickup({ user, children }: any) {
+  const [showTempForm, setShowTempForm] = useState(false);
+  const [selectedChild, setSelectedChild] = useState('STU2024156');
+  const [tempGuardians, setTempGuardians] = useState<any[]>([
+    {
+      id: 'TMP001',
+      studentId: 'STU2024156',
+      name: 'Maria Santos',
+      relationship: 'Aunt',
+      phone: '0917-123-4567',
+      validUntil: new Date(2026, 2, 10, 18, 0),
+      status: 'active',
+      createdAt: new Date(2026, 2, 9, 8, 0)
+    }
+  ]);
+  const [guardianName, setGuardianName] = useState('');
+  const [relationship, setRelationship] = useState('');
+  const [phone, setPhone] = useState('');
+  const [validHours, setValidHours] = useState('2');
+
+  const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
+
+  const handleGenerateTempQR = () => {
+    if (!guardianName || !relationship || !phone) return;
+
+    const expiryDate = new Date();
+    expiryDate.setHours(expiryDate.getHours() + parseInt(validHours));
+
+    const newGuardian = {
+      id: `TMP${String(tempGuardians.length + 1).padStart(3, '0')}`,
+      studentId: selectedChild,
+      name: guardianName,
+      relationship,
+      phone,
+      validUntil: expiryDate,
+      status: 'active',
+      createdAt: new Date()
+    };
+
+    setTempGuardians([newGuardian, ...tempGuardians]);
+    setGuardianName('');
+    setRelationship('');
+    setPhone('');
+    setValidHours('2');
+    setShowTempForm(false);
+  };
+
+  const handleRevoke = (id: string) => {
+    setTempGuardians(tempGuardians.map(g => 
+      g.id === id ? { ...g, status: 'revoked' } : g
+    ));
+  };
+
+  const isExpired = (validUntil: Date) => {
+    return new Date() > new Date(validUntil);
+  };
+
+  const getTimeRemaining = (validUntil: Date) => {
+    const now = new Date();
+    const expiry = new Date(validUntil);
+    const diff = expiry.getTime() - now.getTime();
+    
+    if (diff <= 0) return 'Expired';
+    
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (hours > 0) return `${hours}h ${minutes}m remaining`;
+    return `${minutes}m remaining`;
+  };
+
+  // Filter temporary guardians for selected child
+  const filteredTempGuardians = tempGuardians.filter(g => g.studentId === selectedChild);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student Pickup QR Code</h1>
+        <p className="text-[#6b6456]">Show this QR code to the security guard during pickup</p>
+      </div>
+
+      {/* Child Selection Filter */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">
+          Select Child
+        </label>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {children.map((child: any) => (
+            <button
+              key={child.id}
+              onClick={() => setSelectedChild(child.id)}
+              className={`p-4 rounded-xl border-2 transition-all text-left ${
+                selectedChild === child.id
+                  ? 'border-[#c9a961] bg-[#c9a961]/5 shadow-md'
+                  : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
+                  selectedChild === child.id 
+                    ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
+                    : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
+                }`}>
+                  {child.name.split(' ').map((n: string) => n[0]).join('')}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
+                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                </div>
+                {selectedChild === child.id && (
+                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Child Information */}
+      <div className="bg-gradient-to-r from-[#c9a961] via-[#d4af37] to-[#b8994f] rounded-xl p-6 text-white">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-2xl font-bold">
+            {childInfo.name.split(' ').map((n: string) => n[0]).join('')}
+          </div>
+          <div>
+            <h2 className="text-2xl font-bold">{childInfo.name}</h2>
+            <p className="text-white/90">{childInfo.grade}</p>
+            <p className="text-sm text-white/80">ID: {childInfo.id}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Permanent Parent QR Code */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] p-6 text-white">
+            <div className="flex items-center gap-3 mb-2">
+              <Shield className="w-6 h-6" />
+              <h3 className="text-xl font-bold">Permanent QR Code</h3>
+            </div>
+            <p className="text-sm text-white/80">Authorized Parent/Guardian</p>
+          </div>
+
+          <div className="p-8">
+            {/* QR Code Placeholder */}
+            <div className="bg-white border-4 border-[#1a2b4a] rounded-2xl p-6 mb-6">
+              <div className="aspect-square bg-gradient-to-br from-[#1a2b4a] via-[#2d4263] to-[#7d1935] rounded-xl flex items-center justify-center relative overflow-hidden">
+                {/* QR-like pattern simulation */}
+                <div className="absolute inset-0 grid grid-cols-8 grid-rows-8 gap-1 p-4">
+                  {[...Array(64)].map((_, i) => (
+                    <div 
+                      key={i} 
+                      className={`rounded-sm ${Math.random() > 0.5 ? 'bg-white' : 'bg-transparent'}`}
+                    ></div>
+                  ))}
+                </div>
+                <div className="relative z-10 bg-white rounded-lg p-4">
+                  <QrCode className="w-16 h-16 text-[#1a2b4a]" />
+                </div>
+              </div>
+            </div>
+
+            {/* Parent Information */}
+            <div className="space-y-3 bg-[#faf8f5] rounded-xl p-4 border border-gray-200">
+              <div>
+                <div className="text-xs text-[#6b6456] mb-1">Authorized Parent</div>
+                <div className="font-semibold text-[#1a2b4a]">{user.name}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[#6b6456] mb-1">Parent ID</div>
+                <div className="font-semibold text-[#1a2b4a]">{user.id}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[#6b6456] mb-1">Student</div>
+                <div className="font-semibold text-[#1a2b4a]">{childInfo.name}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[#6b6456] mb-1">Status</div>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
+                  <CheckCircle className="w-3 h-3" />
+                  Always Valid
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all">
+                <Download className="w-4 h-4" />
+                <span className="text-sm font-medium">Download</span>
+              </button>
+             {/*  <button className="flex-1 flex items-center justify-center gap-2 px-4 py-3 border-2 border-[#1a2b4a] text-[#1a2b4a] rounded-lg hover:bg-[#faf8f5] transition-all">
+                <Mail className="w-4 h-4" />
+                <span className="text-sm font-medium">Email</span>
+              </button> */}
+            </div>
+          </div>
+        </div>
+
+        {/* Temporary QR Code Generation */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="bg-gradient-to-r from-[#7d1935] to-[#9b2847] p-6 text-white">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <Timer className="w-6 h-6" />
+                <h3 className="text-xl font-bold">Temporary Access</h3>
+              </div>
+              <button 
+                onClick={() => setShowTempForm(!showTempForm)}
+                className="flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-lg rounded-lg hover:bg-white/30 transition-all"
+              >
+                {showTempForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                <span className="text-sm font-medium">{showTempForm ? 'Cancel' : 'New'}</span>
+              </button>
+            </div>
+            <p className="text-sm text-white/80">Generate for alternative guardians</p>
+          </div>
+
+          <div className="p-6">
+            {showTempForm ? (
+              <div className="space-y-4 mb-6 p-4 bg-[#faf8f5] rounded-xl border border-gray-200">
+                <div>
+                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">
+                    Guardian Name
+                  </label>
+                  <input
+                    type="text"
+                    value={guardianName}
+                    onChange={(e) => setGuardianName(e.target.value)}
+                    placeholder="Enter full name"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">
+                    Relationship to Student
+                  </label>
+                  <select
+                    value={relationship}
+                    onChange={(e) => setRelationship(e.target.value)}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                  >
+                    <option value="">Select relationship</option>
+                    <option value="Aunt">Aunt</option>
+                    <option value="Uncle">Uncle</option>
+                    <option value="Grandmother">Grandmother</option>
+                    <option value="Grandfather">Grandfather</option>
+                    <option value="Family Friend">Family Friend</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">
+                    Contact Number
+                  </label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="0917-XXX-XXXX"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">
+                    Valid For (Hours)
+                  </label>
+                  <select
+                    value={validHours}
+                    onChange={(e) => setValidHours(e.target.value)}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                  >
+                    <option value="1">1 hour</option>
+                    <option value="2">2 hours</option>
+                    <option value="3">3 hours</option>
+                    <option value="4">4 hours</option>
+                    <option value="6">6 hours</option>
+                    <option value="12">12 hours</option>
+                    <option value="24">24 hours</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={handleGenerateTempQR}
+                  disabled={!guardianName || !relationship || !phone}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <QrCode className="w-5 h-5" />
+                  <span className="font-semibold">Generate Temporary QR</span>
+                </button>
+              </div>
+            ) : (
+              <div className="bg-[#faf8f5] rounded-xl p-6 border border-gray-200 text-center mb-6">
+                <UserPlus className="w-12 h-12 text-[#7d1935] mx-auto mb-3" />
+                <h4 className="font-semibold text-[#1a2b4a] mb-2">No Temporary Access</h4>
+                <p className="text-sm text-[#6b6456] mb-4">
+                  Generate a temporary QR code when you can't pick up your child
+                </p>
+                <button
+                  onClick={() => setShowTempForm(true)}
+                  className="inline-flex items-center gap-2 px-6 py-2 bg-[#7d1935] text-white rounded-lg hover:bg-[#9b2847] transition-all"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="text-sm font-medium">Generate New</span>
+                </button>
+              </div>
+            )}
+
+            {/* Active Temporary QR Codes */}
+            {filteredTempGuardians.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-[#1a2b4a]">Active Temporary Access</h4>
+                {filteredTempGuardians.map((guardian) => {
+                  const expired = isExpired(guardian.validUntil);
+                  const revoked = guardian.status === 'revoked';
+                  
+                  return (
+                    <div 
+                      key={guardian.id}
+                      className={`p-4 rounded-xl border-2 transition-all ${
+                        revoked 
+                          ? 'bg-gray-50 border-gray-200 opacity-60' 
+                          : expired 
+                            ? 'bg-red-50 border-red-200' 
+                            : 'bg-green-50 border-green-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h5 className="font-semibold text-[#1a2b4a]">{guardian.name}</h5>
+                            {revoked ? (
+                              <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-xs font-medium rounded">
+                                Revoked
+                              </span>
+                            ) : expired ? (
+                              <span className="px-2 py-0.5 bg-red-200 text-red-700 text-xs font-medium rounded">
+                                Expired
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-green-200 text-green-700 text-xs font-medium rounded">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-[#6b6456]">{guardian.relationship} • {guardian.phone}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#6b6456]">Valid Until:</span>
+                          <span className="font-medium text-[#1a2b4a]">
+                            {new Date(guardian.validUntil).toLocaleString('en-US', { 
+                              month: 'short', 
+                              day: 'numeric', 
+                              hour: '2-digit', 
+                              minute: '2-digit' 
+                            })}
+                          </span>
+                        </div>
+                        {!expired && !revoked && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[#6b6456]">Time Remaining:</span>
+                            <span className="font-semibold text-green-600">
+                              {getTimeRemaining(guardian.validUntil)}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#6b6456]">QR Code ID:</span>
+                          <span className="font-mono text-[#1a2b4a]">{guardian.id}</span>
+                        </div>
+                      </div>
+
+                      {!expired && !revoked && (
+                        <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+                          <button className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all text-xs font-medium">
+                            <QrCode className="w-3 h-3" />
+                            View QR
+                          </button>
+                          <button 
+                            onClick={() => handleRevoke(guardian.id)}
+                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 transition-all text-xs font-medium"
+                          >
+                            <X className="w-3 h-3" />
+                            Revoke
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Instructions */}
+      <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
+            <AlertCircle className="w-6 h-6 text-blue-600" />
+          </div>
+          <div className="flex-1">
+            <h4 className="font-semibold text-[#1a2b4a] mb-3">Important Pickup Instructions</h4>
+            <ul className="space-y-2 text-sm text-[#6b6456]">
+              <li className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1.5 flex-shrink-0"></span>
+                <span><strong>Permanent QR Code:</strong> Always available for authorized parents/guardians</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1.5 flex-shrink-0"></span>
+                <span><strong>Temporary QR Code:</strong> Generate when someone else needs to pick up your child (aunt, uncle, family friend, etc.)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1.5 flex-shrink-0"></span>
+                <span><strong>Security:</strong> Show the QR code to the security guard at the gate. They will scan and verify the information before releasing your child.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1.5 flex-shrink-0"></span>
+                <span><strong>Expiration:</strong> Temporary QR codes automatically expire after the set duration. You can also manually revoke them anytime.</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="w-1.5 h-1.5 bg-blue-600 rounded-full mt-1.5 flex-shrink-0"></span>
+                <span><strong>Valid ID Required:</strong> The person picking up must present a valid government ID matching the name on the QR code.</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Billing & Payments
+function BillingPayments({ schoolYear }: any) {
+  const billingInfo = {
+    tuitionFee: 125000,
+    miscFees: 15000,
+    total: 140000,
+    paid: 140000,
+    balance: 0
+  };
+
+  const paymentHistory = [
+    { date: 'Aug 15, 2025', description: 'First Semester Tuition', amount: 62500, status: 'Paid' },
+    { date: 'Aug 15, 2025', description: 'Miscellaneous Fees', amount: 15000, status: 'Paid' },
+    { date: 'Jan 15, 2026', description: 'Second Semester Tuition', amount: 62500, status: 'Paid' }
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Billing & Payments</h1>
+        <p className="text-[#6b6456]">View tuition fees and payment history</p>
+      </div>
+
+      {/* Billing Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-lg p-6 text-white">
+          <Settings className="w-8 h-8 mb-3" />
+          <p className="text-3xl font-bold mb-1">₱{billingInfo.total.toLocaleString()}</p>
+          <p className="text-white/90">Total Fees</p>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-[#2c2c2c]">₱{billingInfo.paid.toLocaleString()}</p>
+              <p className="text-xs text-[#8b8476]">Paid</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+              <Settings className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-[#2c2c2c]">₱{billingInfo.balance.toLocaleString()}</p>
+              <p className="text-xs text-[#8b8476]">Balance</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-[#c9a961] to-[#d4af37] rounded-lg p-6 text-white">
+          <CheckCircle className="w-8 h-8 mb-3" />
+          <p className="text-2xl font-bold mb-1">Fully Paid</p>
+          <p className="text-white/90">Payment Status</p>
+        </div>
+      </div>
+
+      {/* Payment History */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-lg font-semibold text-[#1a2b4a]">Payment History</h3>
+          <button className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all">
+            <Download className="w-4 h-4" />
+            <span className="text-sm font-medium">Download Receipts</span>
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-[#faf8f5] border-b border-gray-200">
+              <tr>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Date</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Description</th>
+                <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Amount</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {paymentHistory.map((payment, index) => (
+                <tr key={index} className="hover:bg-[#faf8f5] transition-colors">
+                  <td className="px-6 py-4 text-sm text-[#2c2c2c]">{payment.date}</td>
+                  <td className="px-6 py-4 text-sm text-[#2c2c2c]">{payment.description}</td>
+                  <td className="px-6 py-4 text-sm text-right font-semibold text-[#2c2c2c]">
+                    ₱{payment.amount.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                      {payment.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Messaging Center
+function MessagingCenter() {
+  const messages = [
+    {
+      id: 1,
+      from: 'Mr. Davidson',
+      subject: 'Great progress in Mathematics',
+      preview: 'Sarah has been showing excellent improvement in her problem-solving skills...',
+      date: 'Mar 8',
+      read: false
+    },
+    {
+      id: 2,
+      from: 'Principal Sullivan',
+      subject: 'Parent-Teacher Conference',
+      preview: 'We would like to invite you to our upcoming parent-teacher conference...',
+      date: 'Mar 7',
+      read: false
+    },
+    {
+      id: 3,
+      from: 'Ms. Cruz',
+      subject: 'English Essay Feedback',
+      preview: 'Your daughter submitted an outstanding essay on "The Power of Faith"...',
+      date: 'Mar 5',
+      read: true
+    }
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Messages</h1>
+          <p className="text-[#6b6456]">Communication with teachers and school administration</p>
+        </div>
+        <button className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg hover:shadow-lg transition-all">
+          <Mail className="w-5 h-5" />
+          <span className="font-medium">New Message</span>
+        </button>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 divide-y divide-gray-200">
+        {messages.map((message) => (
+          <div key={message.id} className={`p-6 hover:bg-[#faf8f5] transition-colors cursor-pointer ${
+            !message.read ? 'bg-[#c9a961]/5' : ''
+          }`}>
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
+                {message.from.charAt(0)}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-start justify-between mb-2">
+                  <div>
+                    <h3 className="font-semibold text-[#1a2b4a]">{message.from}</h3>
+                    <p className="text-sm text-[#2c2c2c] font-medium">{message.subject}</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-[#6b6456]">{message.date}</span>
+                    {!message.read && (
+                      <div className="w-2 h-2 bg-[#c9a961] rounded-full"></div>
+                    )}
+                  </div>
+                </div>
+                <p className="text-sm text-[#6b6456]">{message.preview}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
