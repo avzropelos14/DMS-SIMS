@@ -450,25 +450,37 @@ function PasswordResetSection() {
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
+  const attemptReset = async (accessToken: string | undefined) => {
+    const { data, error } = await supabase.functions.invoke('admin-reset-password', {
+      body: { email: resetEmail.trim(), new_password: newPassword },
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+  };
+
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatus('sending');
     setErrorMessage('');
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      const { data, error } = await supabase.functions.invoke('admin-reset-password', {
-        body: { email: resetEmail.trim(), new_password: newPassword },
-        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-      });
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
+      // admin-reset-password pages through listUsers before updating, so it's slower and
+      // more prone to a client-side network/timeout error firing after the password was
+      // already changed server-side. The reset itself is idempotent, so one silent retry
+      // resolves that case instead of surfacing a false failure.
+      try {
+        await attemptReset(accessToken);
+      } catch {
+        await attemptReset(accessToken);
+      }
       setStatus('sent');
       setResetEmail('');
       setNewPassword('');
     } catch (err: any) {
       setStatus('error');
-      setErrorMessage(err?.message || "Couldn't reset that account's password. Please try again.");
+      setErrorMessage(err?.message || "Couldn't confirm the password reset after two attempts — it may have already gone through. Please verify with the account holder before retrying.");
     }
   };
 
