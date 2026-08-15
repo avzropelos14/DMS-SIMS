@@ -1744,18 +1744,41 @@ function StudentManagement({ schoolYear }: { schoolYear: string }) {
     setShowStatusModal(true);
   };
 
-  // Builds the payload encoded in each student's Parent/Guardian QR Authentication Pass.
-  // Security personnel scan this at dismissal to verify the pickup is an authorized guardian.
-  const buildGuardianQRPayload = (student: Student) => JSON.stringify({
-    type: 'GUARDIAN_AUTH_PASS',
+  // The Guard portal's scanner only accepts the PickupQRPayload shape it and the Parent
+  // portal share (see GuardPortal.tsx / ParentPortal.tsx) — type 'permanent' plus the
+  // guardian's real student_guardians link id, not the denormalized guardian_* text
+  // fields on the student row. Fetch that link when the detail modal opens.
+  const [primaryGuardian, setPrimaryGuardian] = useState<{ id: string; name: string; relationship: string } | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!showViewModal || !selectedStudent) { setPrimaryGuardian(undefined); return; }
+    let cancelled = false;
+    setPrimaryGuardian(undefined);
+    (async () => {
+      const { data } = await supabase
+        .from('student_guardians')
+        .select('guardian_id, relationship, is_primary_contact, guardians(full_name)')
+        .eq('student_id', selectedStudent.id)
+        .order('is_primary_contact', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled) return;
+      setPrimaryGuardian(data ? {
+        id: data.guardian_id,
+        name: (data as any).guardians?.full_name ?? selectedStudent.guardianName,
+        relationship: data.relationship,
+      } : null);
+    })();
+    return () => { cancelled = true; };
+  }, [showViewModal, selectedStudent]);
+
+  const buildGuardianQRPayload = (student: Student, guardian: { id: string; name: string; relationship: string }) => JSON.stringify({
+    type: 'permanent',
+    guardianId: guardian.id,
+    guardianName: guardian.name,
+    relationship: guardian.relationship,
     studentId: student.id,
     studentName: student.name,
-    grade: student.grade,
-    section: student.section,
-    guardianName: student.guardianName,
-    guardianRelationship: student.guardianRelationship,
-    guardianPhone: student.guardianPhone,
-    schoolYear,
   });
 
   return (
@@ -1923,23 +1946,28 @@ function StudentManagement({ schoolYear }: { schoolYear: string }) {
                   <QrCode className="w-5 h-5 text-[#c9a961]" />
                   <h3 className="text-sm font-semibold text-[#1a2b4a]">Parent/Guardian QR Authentication Pass</h3>
                 </div>
-                <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
-                  <div id={`guardian-qr-${selectedStudent.id}`} className="p-3 bg-white rounded-lg border border-gray-200 shrink-0">
-                    <QRCodeSVG value={buildGuardianQRPayload(selectedStudent)} size={128} level="M" includeMargin={false} />
+                {primaryGuardian === undefined ? (
+                  <p className="text-sm text-[#8b8476]">Loading linked guardian…</p>
+                ) : primaryGuardian === null ? (
+                  <p className="text-sm text-[#8b8476]">No guardian is linked to this student yet in Student Guardians, so a pickup QR can't be issued here. Ask the parent to generate one from their Parent Portal Pickup screen once they're linked, or link a guardian first.</p>
+                ) : (
+                  <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+                    <div id={`guardian-qr-${selectedStudent.id}`} className="p-3 bg-white rounded-lg border border-gray-200 shrink-0">
+                      <QRCodeSVG value={buildGuardianQRPayload(selectedStudent, primaryGuardian)} size={128} level="M" includeMargin={false} />
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-1.5 text-sm">
+                      <p><span className="text-[#8b8476]">Authorized Guardian:</span> <span className="font-semibold text-[#2c2c2c]">{primaryGuardian.name}</span></p>
+                      <p><span className="text-[#8b8476]">Relationship:</span> <span className="font-medium text-[#2c2c2c]">{primaryGuardian.relationship}</span></p>
+                      <p className="text-xs text-[#8b8476] pt-1">Present this QR code at dismissal. Security personnel will scan it to verify the guardian's identity before releasing {selectedStudent.name.split(' ')[0]}.</p>
+                      <button
+                        onClick={() => window.print()}
+                        className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
+                      >
+                        <Printer className="w-3.5 h-3.5" /> Print Pass
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0 space-y-1.5 text-sm">
-                    <p><span className="text-[#8b8476]">Authorized Guardian:</span> <span className="font-semibold text-[#2c2c2c]">{selectedStudent.guardianName}</span></p>
-                    <p><span className="text-[#8b8476]">Relationship:</span> <span className="font-medium text-[#2c2c2c]">{selectedStudent.guardianRelationship}</span></p>
-                    <p><span className="text-[#8b8476]">Contact:</span> <span className="font-medium text-[#2c2c2c]">{selectedStudent.guardianPhone}</span></p>
-                    <p className="text-xs text-[#8b8476] pt-1">Present this QR code at dismissal. Security personnel will scan it to verify the guardian's identity before releasing {selectedStudent.name.split(' ')[0]}.</p>
-                    <button
-                      onClick={() => window.print()}
-                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
-                    >
-                      <Printer className="w-3.5 h-3.5" /> Print Pass
-                    </button>
-                  </div>
-                </div>
+                )}
               </div>
 
               <div className="flex gap-3 pt-2 border-t border-gray-200">
