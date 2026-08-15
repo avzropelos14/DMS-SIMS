@@ -420,7 +420,7 @@ export function AdminDashboard({ user, onLogout, accessLevel = 'full', tuitionFe
 
       {activeView === 'overview' && !isRegistrar && <OverviewSection user={user} schoolYear={schoolYear} />}
       {activeView === 'enrollment' && isRegistrar && <EnrollmentSection schoolYear={schoolYear} isArchivedYear={isArchivedYear} user={user} />}
-      {activeView === 'students' && <StudentManagement schoolYear={schoolYear} isAdmin={isAdmin} />}
+      {activeView === 'students' && <StudentManagement schoolYear={schoolYear} />}
       {activeView === 'classmanagement' && !isRegistrar && <ClassManagementSection schoolYear={schoolYear} isArchivedYear={isArchivedYear} />}
       {activeView === 'staff' && !isRegistrar && <StaffManagement schoolYear={schoolYear} isAdmin={isAdmin} />}
       {activeView === 'academics' && <AcademicsSection schoolYear={schoolYear} isArchivedYear={isArchivedYear} />}
@@ -1464,7 +1464,7 @@ function FacultyForm({ role, onCancel, onAdded }: { role: string; onCancel: () =
 }
 
 // Student Management Section
-type StudentStatus = 'Active' | 'Graduate' | 'Dropped' | 'Transferred';
+type StudentStatus = 'Active' | 'Graduate' | 'Dropped' | 'Transferred' | 'Archived';
 
 type Student = {
   id: string; name: string; grade: string; section: string;
@@ -1599,12 +1599,12 @@ function StudentTuitionScholarships({ studentId, grade, schoolYearLabel }: { stu
   );
 }
 
-function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin: boolean }) {
+function StudentManagement({ schoolYear }: { schoolYear: string }) {
   const [activeTab, setActiveTab] = useState<StudentStatus>('Active');
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [pendingStatus, setPendingStatus] = useState<StudentStatus>('Active');
@@ -1614,7 +1614,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
   const [loadError, setLoadError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [sectionCatalog, setSectionCatalog] = useState<{ grade: string; section: string }[]>([]);
 
   const GRADE_OPTIONS = ['All', 'Kinder 1', 'Kinder 2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
@@ -1674,6 +1674,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
     Graduate: { label: 'Graduate', color: 'bg-blue-100 text-blue-800', badge: 'bg-blue-500' },
     Dropped: { label: 'Dropped', color: 'bg-red-100 text-red-800', badge: 'bg-red-500' },
     Transferred: { label: 'Transferred', color: 'bg-purple-100 text-purple-800', badge: 'bg-purple-500' },
+    Archived: { label: 'Archived', color: 'bg-gray-200 text-gray-700', badge: 'bg-gray-500' },
   };
 
   // Labels used only for the status tab/dropdown control — the "Active" tab is
@@ -1683,6 +1684,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
     Graduate: 'Graduate',
     Dropped: 'Dropped',
     Transferred: 'Transferred',
+    Archived: 'Archived',
   };
 
   // Extracts the family (last) name for alphabetical sorting, e.g. "John Carlo Rivera" -> "Rivera"
@@ -1692,16 +1694,17 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
   };
 
   const filtered = students
-    .filter(s => activeTab === 'Active' ? true : s.status === activeTab)
+    .filter(s => activeTab === 'Active' ? s.status !== 'Archived' : s.status === activeTab)
     .filter(s => gradeFilter === 'All' || s.grade === gradeFilter)
     .filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => familyName(a.name).localeCompare(familyName(b.name)));
 
   const counts: Record<StudentStatus, number> = {
-    Active: students.length,
+    Active: students.filter(s => s.status !== 'Archived').length,
     Graduate: students.filter(s => s.status === 'Graduate').length,
     Dropped: students.filter(s => s.status === 'Dropped').length,
     Transferred: students.filter(s => s.status === 'Transferred').length,
+    Archived: students.filter(s => s.status === 'Archived').length,
   };
 
   const changeStatus = async () => {
@@ -1713,21 +1716,13 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
     setShowViewModal(false);
   };
 
-  const deleteStudent = async () => {
+  const archiveStudent = async () => {
     if (!selectedStudent) return;
-    setDeleteError(null);
-    if (isAdmin) {
-      try {
-        await deleteAuthAccountFor({ studentId: selectedStudent.id });
-      } catch (e: any) {
-        setDeleteError(e?.message || "Failed to remove the student's login account.");
-        return;
-      }
-    }
-    const { error } = await supabase.from('students').delete().eq('id', selectedStudent.id);
-    if (error) { setDeleteError(error.message); return; }
-    setStudents(prev => prev.filter(s => s.id !== selectedStudent.id));
-    setShowDeleteModal(false);
+    setArchiveError(null);
+    const { error } = await supabase.from('students').update({ status: 'Archived' }).eq('id', selectedStudent.id);
+    if (error) { setArchiveError(error.message); return; }
+    setStudents(prev => prev.map(s => s.id === selectedStudent.id ? { ...s, status: 'Archived' } : s));
+    setShowArchiveModal(false);
     setShowViewModal(false);
   };
 
@@ -1773,7 +1768,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
           </button>
           {showStatusDropdown && (
             <div className="absolute z-10 mt-2 flex flex-col gap-2 p-2 bg-white rounded-lg shadow-lg border border-gray-200 min-w-full">
-              {(['Active', 'Graduate', 'Dropped', 'Transferred'] as StudentStatus[]).map(tab => (
+              {(['Active', 'Graduate', 'Dropped', 'Transferred', 'Archived'] as StudentStatus[]).map(tab => (
                 <button
                   key={tab}
                   onClick={() => { setActiveTab(tab); setShowStatusDropdown(false); }}
@@ -1864,9 +1859,9 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
                       <button onClick={() => openStatusChange(student)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="Change Status">
                         <UserCheck className="w-4 h-4 text-blue-500" />
                       </button>
-                      {isAdmin && (
-                        <button onClick={() => { setSelectedStudent(student); setShowDeleteModal(true); }} className="p-2 hover:bg-red-50 rounded-lg transition-colors" title="Delete Account">
-                          <Trash2 className="w-4 h-4 text-red-400" />
+                      {student.status !== 'Archived' && (
+                        <button onClick={() => { setSelectedStudent(student); setShowArchiveModal(true); }} className="p-2 hover:bg-gray-100 rounded-lg transition-colors" title="Archive Student">
+                          <Archive className="w-4 h-4 text-[#8b8476]" />
                         </button>
                       )}
                     </div>
@@ -1938,7 +1933,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
               <div className="flex gap-3 pt-2 border-t border-gray-200">
                 <button onClick={() => { setShowViewModal(false); setShowEditModal(true); }} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm">Edit</button>
                 <button onClick={() => openStatusChange(selectedStudent)} className="flex-1 px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg font-medium hover:bg-blue-50 transition-all text-sm">Change Status</button>
-                {isAdmin && <button onClick={() => { setShowDeleteModal(true); }} className="px-4 py-2.5 border-2 border-red-200 text-red-600 rounded-lg font-medium hover:bg-red-50 transition-all text-sm flex items-center gap-1"><Trash2 className="w-4 h-4" /></button>}
+                {selectedStudent.status !== 'Archived' && <button onClick={() => { setShowArchiveModal(true); }} className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm flex items-center gap-1" title="Archive Student"><Archive className="w-4 h-4" /></button>}
                 <button onClick={() => setShowViewModal(false)} className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm">Close</button>
               </div>
             </div>
@@ -1986,7 +1981,7 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
             <div className="p-6 space-y-4">
               <p className="text-sm text-[#6b6456]">Update status for <strong className="text-[#1a2b4a]">{selectedStudent.name}</strong>:</p>
               <div className="space-y-2">
-                {(['Active', 'Graduate', 'Dropped', 'Transferred'] as StudentStatus[]).map(s => (
+                {(['Active', 'Graduate', 'Dropped', 'Transferred', 'Archived'] as StudentStatus[]).map(s => (
                   <label key={s} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${pendingStatus === s ? 'border-[#c9a961] bg-[#fdf9f0]' : 'border-gray-200 hover:border-gray-300'}`}>
                     <input type="radio" name="status" value={s} checked={pendingStatus === s} onChange={() => setPendingStatus(s)} className="accent-[#c9a961]" />
                     <span className={`text-sm font-semibold px-2.5 py-0.5 rounded-full ${tabConfig[s].color}`}>{s}</span>
@@ -2002,22 +1997,22 @@ function StudentManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmi
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && selectedStudent && isAdmin && (
+      {/* Archive Confirmation Modal */}
+      {showArchiveModal && selectedStudent && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
             <div className="p-6 text-center space-y-4">
-              <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto">
-                <Trash2 className="w-7 h-7 text-red-500" />
+              <div className="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center mx-auto">
+                <Archive className="w-7 h-7 text-[#6b6456]" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-[#1a2b4a] mb-1">Delete Student Account</h3>
-                <p className="text-sm text-[#6b6456]">Permanently delete the account of <strong>{selectedStudent.name}</strong>? This action cannot be undone.</p>
+                <h3 className="text-lg font-bold text-[#1a2b4a] mb-1">Archive Student</h3>
+                <p className="text-sm text-[#6b6456]">Archive <strong>{selectedStudent.name}</strong>? They'll move to the Archived tab and won't appear in the active roster. This can be undone from Change Status.</p>
               </div>
-              {deleteError && <p className="text-sm text-red-500">{deleteError}</p>}
+              {archiveError && <p className="text-sm text-red-500">{archiveError}</p>}
               <div className="flex gap-3">
-                <button onClick={() => { setShowDeleteModal(false); setDeleteError(null); }} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
-                <button onClick={deleteStudent} className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 transition-all">Delete</button>
+                <button onClick={() => { setShowArchiveModal(false); setArchiveError(null); }} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all">Cancel</button>
+                <button onClick={archiveStudent} className="flex-1 px-4 py-2.5 bg-[#1a2b4a] text-white rounded-xl font-medium hover:bg-[#2d4263] transition-all">Archive</button>
               </div>
             </div>
           </div>
