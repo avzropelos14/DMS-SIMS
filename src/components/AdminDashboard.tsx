@@ -2829,7 +2829,7 @@ function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin:
     [f.firstName.trim(), f.middleName.trim(), f.lastName.trim()].filter(Boolean).join(' ') + (f.suffix ? ` ${f.suffix}` : '');
   const [addingEmployee, setAddingEmployee] = useState(false);
   const [addEmployeeError, setAddEmployeeError] = useState<string | null>(null);
-  const [newEmployeeCredentials, setNewEmployeeCredentials] = useState<{ name: string; email: string; password: string } | null>(null);
+  const [newEmployeeCredentials, setNewEmployeeCredentials] = useState<{ name: string; email: string; password: string | null } | null>(null);
 
   const statusConfig: Record<EmployeeStatus, { label: string; bg: string; text: string; dot: string }> = {
     active: { label: 'Active', bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-500' },
@@ -2909,10 +2909,11 @@ function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin:
     }
     setAddingEmployee(true);
     setAddEmployeeError(null);
+    const fullName = composeEmployeeName(newEmployee);
+    const departmentName = newEmployee.position === 'Teacher' ? newEmployee.subject : '';
+    let inserted: { id: string } | null = null;
     try {
-      const fullName = composeEmployeeName(newEmployee);
-      const departmentName = newEmployee.position === 'Teacher' ? newEmployee.subject : '';
-      const inserted = await insertEmployee({
+      inserted = await insertEmployee({
         fullName,
         position: newEmployee.position,
         departmentName,
@@ -2922,11 +2923,11 @@ function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin:
         dateHired: newEmployee.dateHired,
         address: newEmployee.address || null,
         licenseNo: newEmployee.licenseNo || null,
-      });
+      }) as { id: string };
       const role = STAFF_POSITION_ROLES[newEmployee.position];
-      const credentials = await createStaffAccount(inserted.id as string, role);
+      const credentials = await createStaffAccount(inserted.id, role);
       setEmployees(prev => [...prev, {
-        id: inserted.id, name: fullName, position: newEmployee.position, department: departmentName,
+        id: inserted!.id, name: fullName, position: newEmployee.position, department: departmentName,
         email: credentials.email, phone: newEmployee.phone, education: newEmployee.education,
         dateHired: newEmployee.dateHired, status: 'active', address: newEmployee.address, licenseNo: newEmployee.licenseNo || undefined,
       }]);
@@ -2934,6 +2935,24 @@ function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin:
       setShowAddModal(false);
       setNewEmployeeCredentials({ name: fullName, email: credentials.email, password: credentials.password });
     } catch (e: any) {
+      // supabase.functions.invoke can throw on a client-side network/timeout error even
+      // after create-staff-account finished successfully server-side. Before reporting a
+      // false failure, check whether the login account actually got created.
+      if (inserted) {
+        const { data: profile } = await supabase.from('profiles').select('email').eq('employee_id', inserted.id).maybeSingle();
+        if (profile?.email) {
+          setEmployees(prev => [...prev, {
+            id: inserted!.id, name: fullName, position: newEmployee.position, department: departmentName,
+            email: profile.email, phone: newEmployee.phone, education: newEmployee.education,
+            dateHired: newEmployee.dateHired, status: 'active', address: newEmployee.address, licenseNo: newEmployee.licenseNo || undefined,
+          }]);
+          setNewEmployee({ firstName: '', middleName: '', lastName: '', suffix: '', position: '', subject: TEACHER_SUBJECTS[0], phone: '', education: '', dateHired: '', address: '', licenseNo: '', employmentType: '' });
+          setShowAddModal(false);
+          setNewEmployeeCredentials({ name: fullName, email: profile.email, password: null });
+          setAddingEmployee(false);
+          return;
+        }
+      }
       setAddEmployeeError(e?.message || 'Failed to add employee.');
     } finally {
       setAddingEmployee(false);
@@ -3191,7 +3210,11 @@ function StaffManagement({ schoolYear, isAdmin }: { schoolYear: string; isAdmin:
             <p className="text-sm text-[#6b6456]">{newEmployeeCredentials.name} can now log in to the system with:</p>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1 text-sm">
               <p><strong>Email:</strong> {newEmployeeCredentials.email}</p>
-              <p><strong>Password:</strong> {newEmployeeCredentials.password}</p>
+              {newEmployeeCredentials.password ? (
+                <p><strong>Password:</strong> {newEmployeeCredentials.password}</p>
+              ) : (
+                <p className="text-[#8b8476]">We couldn't confirm the generated password — use Reset Password to set one before sharing login details.</p>
+              )}
             </div>
             <button
               onClick={() => setNewEmployeeCredentials(null)}
