@@ -3491,6 +3491,7 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
   // couple of frames for it to paint, then read it back out as a PNG.
   const [pdfExportStudent, setPdfExportStudent] = useState<IDStudent | null>(null);
   const [pdfGeneratingIds, setPdfGeneratingIds] = useState<string[]>([]);
+  const [pdfError, setPdfError] = useState<string | null>(null);
   const pdfQrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const waitForNextPaint = () => new Promise<void>(resolve => {
@@ -3516,7 +3517,8 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
       const canvas = pdfQrCanvasRef.current;
       if (canvas && canvasHasDarkPixel(canvas)) return canvas.toDataURL('image/png');
     }
-    return pdfQrCanvasRef.current?.toDataURL('image/png') ?? '';
+    // The QR never painted — better to fail loudly than ship an ID card with a blank QR.
+    throw new Error("The ID card's QR code didn't render in time. Please try again.");
   };
 
   const buildIdCardsPdf = async (students: IDStudent[]) => {
@@ -3535,12 +3537,17 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
     return doc;
   };
 
-  const downloadIdPdf = async (student: IDStudent) => {
+  const downloadIdPdf = async (student: IDStudent): Promise<boolean> => {
     setPdfGeneratingIds(prev => [...prev, student.id]);
+    setPdfError(null);
     try {
       const doc = await buildIdCardsPdf([student]);
       doc.save(`${student.id}_ID_Card.pdf`);
       await printOne(student.id);
+      return true;
+    } catch (e: any) {
+      setPdfError(e?.message || 'Failed to generate the ID card PDF. Please try again.');
+      return false;
     } finally {
       setPdfGeneratingIds(prev => prev.filter(id => id !== student.id));
     }
@@ -3550,10 +3557,13 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
     const targets = idStudents.filter(s => selectedIds.includes(s.id));
     if (targets.length === 0) return;
     setPdfGeneratingIds(prev => [...prev, ...targets.map(s => s.id)]);
+    setPdfError(null);
     try {
       const doc = await buildIdCardsPdf(targets);
       doc.save(`ID_Cards_${targets.length}_${new Date().toISOString().slice(0, 10)}.pdf`);
       await markSelectedPrinted();
+    } catch (e: any) {
+      setPdfError(e?.message || 'Failed to generate the ID cards PDF. Please try again.');
     } finally {
       setPdfGeneratingIds(prev => prev.filter(id => !targets.some(s => s.id === id)));
     }
@@ -3617,6 +3627,12 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
             {pdfGeneratingIds.length > 0 ? 'Generating PDF…' : `Print Selected (${selectedIds.length})`}
           </button>
         </div>
+        {pdfError && (
+          <div className="mt-3 flex items-start gap-2.5 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>{pdfError}</span>
+          </div>
+        )}
       </div>
 
       {/* Student Table */}
@@ -3802,8 +3818,14 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                 </label>
               )}
 
+              {pdfError && (
+                <div className="w-full mt-3 flex items-start gap-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>{pdfError}</span>
+                </div>
+              )}
               <button
-                onClick={async () => { await downloadIdPdf(previewStudent); setShowPreviewModal(false); setPreviewSide('front'); }}
+                onClick={async () => { const ok = await downloadIdPdf(previewStudent); if (ok) { setShowPreviewModal(false); setPreviewSide('front'); } }}
                 disabled={pdfGeneratingIds.includes(previewStudent.id)}
                 className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#1a6b45] to-[#238a5c] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               >
