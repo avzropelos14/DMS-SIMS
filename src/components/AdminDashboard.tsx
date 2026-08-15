@@ -6292,6 +6292,7 @@ function EnrollmentSection({ schoolYear, isArchivedYear = false, user }: { schoo
       const { data } = await supabase
         .from('students')
         .select('id, first_name, middle_name, last_name, grade_level')
+        .eq('status', 'Active')
         .ilike('last_name', `%${continuingSearch.trim()}%`)
         .limit(20);
       if (!active) return;
