@@ -83,7 +83,7 @@ export function StaffProfileView({ user, color = '#1a2b4a' }: { user: any; color
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Full Name" value={fullName} />
               <Field label="Email" value={user.email || 'Not on file'} />
-              <Field label="Role" value={roleLabel} highlight />
+              
               <Field label="Position" value={employee.position || 'Not on file'} />
             </div>
           </div>
@@ -93,7 +93,6 @@ export function StaffProfileView({ user, color = '#1a2b4a' }: { user: any; color
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Employment Type" value={employee.employment_type || 'Not on file'} />
               <Field label="Date Hired" value={formatDate(employee.date_hired)} />
-              <Field label="Status" value={employee.status || 'Not on file'} />
               <Field label="Education" value={employee.education || 'Not on file'} />
               <Field label="License No." value={employee.license_no || 'Not on file'} />
             </div>

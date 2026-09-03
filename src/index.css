@@ -98,3 +98,34 @@ code {
     padding: 4px 8px;
     background: var(--code-bg);
 }
+
+/* Printing a receipt should only print the receipt itself, not the rest of
+   the app's page chrome (sidebar, header, buttons, etc), and should reflow to
+   fill whatever paper size the browser/printer is set to instead of staying
+   capped at the on-screen modal width. */
+@page {
+    size: auto;
+    margin: 10mm;
+}
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    .print-receipt,
+    .print-receipt * {
+        visibility: visible;
+    }
+    .print-receipt {
+        position: absolute;
+        inset: 0;
+        margin: 0;
+        width: 100% !important;
+        max-width: 100% !important;
+        max-height: none !important;
+        height: auto !important;
+        overflow: visible !important;
+        box-shadow: none;
+        border: none;
+        padding: 0 !important;
+    }
+}

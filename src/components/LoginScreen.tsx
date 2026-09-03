@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ArrowRight, Mail, Lock, AlertCircle } from "lucide-react";
 import type { UserRole } from "../App";
 import schoolLogo from "./assets/dmgteLogo.jpg";
 import { supabase } from './../supabase';
 import { resolveIdentity } from '../lib/resolveRole';
+import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
 
 interface LoginScreenProps {
     onLogin: (role: UserRole, userData: any, authUser?: { user_metadata?: Record<string, any> }) => void;
@@ -15,6 +16,19 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     const [error, setError] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_SETTINGS.school_name);
+    const [schoolMotto, setSchoolMotto] = useState(DEFAULT_SCHOOL_SETTINGS.school_motto);
+
+    useEffect(() => {
+        let cancelled = false;
+        getSchoolSettings().then((settings) => {
+            if (!cancelled) {
+                setSchoolName(settings.school_name);
+                setSchoolMotto(settings.school_motto);
+            }
+        });
+        return () => { cancelled = true; };
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -63,7 +77,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 <div
                     className="absolute inset-0 w-[50%] h-[100%] pointer-events-none"
                     style={{
-                        backgroundImage: `repeating-linear-gradient(20deg, transparent, transparent 39px, rgba(255,255,255,0.03) 39px, rgba(255,255,255,0.03) 40px),
+                        backgroundImage: `repeating-linear-gradient(20deg, transparent, transparent 39px, rgba(255, 255, 255, 0.05) 39px, rgba(255, 255, 255, 0.05) 40px),
                             repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(255,255,255,0.03) 39px, rgba(255,255,255,0.03) 40px)`,
                     }}
                 />
@@ -81,9 +95,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                                     fontWeight: 700,
                                 }}
                             >
-                                Dumaguete
-                                <br />
-                                Mission School
+                                {schoolName}
                             </h1>
 
                             {/* Divider rule */}
@@ -108,23 +120,25 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                         </div>
 
                         {/* Motto block */}
-                        <div
-                            className="rounded-xl px-6 py-5 mb-10 w-85 mx-auto"
-                            style={{
-                                backgroundColor: "rgba(255,255,255,0.05)",
-                                borderLeft: "5px solid #c9a961",
-                            }}
-                        >
-                            <p
-                                className="text-lg italic text-white/90 leading-snug"
+                        {schoolMotto && (
+                            <div
+                                className="rounded-xl px-6 py-5 mb-10 w-85 mx-auto"
                                 style={{
-                                    fontFamily:
-                                        "'Libre Baskerville', Georgia, serif",
+                                    backgroundColor: "rgba(255,255,255,0.05)",
+                                    borderLeft: "5px solid #c9a961",
                                 }}
                             >
-                                "Christian Truth, Shaping Lives."
-                            </p>
-                        </div>
+                                <p
+                                    className="text-lg italic text-white/90 leading-snug"
+                                    style={{
+                                        fontFamily:
+                                            "'Libre Baskerville', Georgia, serif",
+                                    }}
+                                >
+                                    "{schoolMotto}"
+                                </p>
+                            </div>
+                        )}
 
                         {/* System info */}
                         <div className="space-y-3 mt-12">
@@ -159,7 +173,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                         className="text-xs text-center"
                         style={{ color: "rgba(255,255,255,0.3)" }}
                     >
-                        © 2026 Dumaguete Mission School. All rights reserved.
+                        © 2026 {schoolName}. All rights reserved.
                     </p>
                 </div>
             </div>
@@ -183,7 +197,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                     </div>
                     <div>
                         <p className="text-white font-semibold text-sm">
-                            Dumaguete Mission School
+                            {schoolName}
                         </p>
                         <p className="text-xs" style={{ color: "#ffffff" }}>
                             Student Information System
@@ -211,7 +225,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                                 >
                                     <img
                                         src={schoolLogo}
-                                        alt="Dumaguete Mission School seal"
+                                        alt={`${schoolName} seal`}
                                         className="w-24 h-24 object-contain rounded-full"
                                     />
                                 </div>

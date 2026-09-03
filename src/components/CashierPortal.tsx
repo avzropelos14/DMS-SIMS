@@ -4,17 +4,210 @@ import { StaffProfileView } from './StaffProfileView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import {
-  LayoutDashboard, DollarSign, Users, Search, Filter,
+  LayoutDashboard, PhilippinePeso, Users, Search, Filter,
   Receipt, Calendar, User, XCircle, Plus,
-  Printer, Edit,
+  Printer,
   CheckCircle, AlertCircle, Clock, CreditCard, Eye, Download
 } from 'lucide-react';
-import { DEFAULT_TUITION_FEES, getTuitionForGrade } from '../lib/tuition';
+import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES, getTuitionForGrade } from '../lib/tuition';
+import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS, type SchoolSettings } from '../lib/schoolSettings';
+import schoolLogo from './assets/dmgteLogo.jpg';
 
 // A peso-sign icon matching the sizing/API of lucide-react icons (className is forwarded),
 // used in place of DollarSign wherever this portal deals in Philippine pesos.
 function PesoSignIcon({ className }: { className?: string }) {
   return <span className={`${className ?? ''} inline-flex items-center justify-center font-bold leading-none`}>₱</span>;
+}
+
+// Shared payment receipt modal — used by both Student Accounts ("View Receipt" on a
+// payment history entry) and Payment History (the Printer action). Shows the live
+// School Information (logo/name/address/contact) instead of hardcoded text, and its
+// container carries .print-receipt so the Print button's window.print() call actually
+// prints only the receipt (see the @media print rule in src/index.css).
+function ReceiptModal({
+  studentName,
+  studentId,
+  grade,
+  reference,
+  amount,
+  method,
+  dateLabel,
+  balanceBefore,
+  schoolYear,
+  onClose,
+}: {
+  studentName: string;
+  studentId: string;
+  grade?: string;
+  reference: string;
+  amount: number;
+  method: string;
+  dateLabel: string;
+  balanceBefore?: number;
+  schoolYear: string;
+  onClose: () => void;
+}) {
+  const [schoolInfo, setSchoolInfo] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
+  useEffect(() => {
+    let cancelled = false;
+    getSchoolSettings().then((s) => { if (!cancelled) setSchoolInfo(s); });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none print-receipt">
+        <div className="flex items-center justify-between mb-6 print:hidden">
+          <h2 className="text-xl font-bold text-[#1a2b4a]">Payment Receipt</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-all">
+            <XCircle className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+        <div className="space-y-4 print:hidden">
+          <div className="flex items-center gap-3 pb-4 border-b border-gray-200">
+            <img src={schoolLogo} alt="School Logo" className="w-14 h-14 object-contain shrink-0" />
+            <div>
+              <p className="font-bold text-[#1a2b4a] text-lg">{schoolInfo.school_name}</p>
+              {schoolInfo.school_motto && <p className="text-xs text-[#8b8476]">{schoolInfo.school_motto}</p>}
+              {schoolInfo.school_address && <p className="text-xs text-[#8b8476]">{schoolInfo.school_address}</p>}
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
+              <User className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <p className="font-semibold text-[#1a2b4a]">{studentName}</p>
+              <p className="text-sm text-[#8b8476] font-mono">{studentId}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-sm text-[#6b6456] mb-1">Receipt No.</p>
+              <p className="font-mono font-bold text-[#1a2b4a]">{reference}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-[#6b6456] mb-1">Date & Time</p>
+              <p className="font-semibold text-[#1a2b4a]">{dateLabel}</p>
+            </div>
+          </div>
+          {grade && (
+            <div className="p-4 bg-[#faf8f5] rounded-xl">
+              <p className="text-sm text-[#6b6456] mb-2">Student Information</p>
+              <p className="font-bold text-[#1a2b4a] text-lg">{studentName}</p>
+              <p className="text-sm text-[#8b8476]">{grade}</p>
+              <p className="text-xs text-[#8b8476] font-mono mt-1">ID: {studentId}</p>
+            </div>
+          )}
+          <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
+            <p className="text-sm text-green-800 mb-2">Payment Details</p>
+            <div className="flex justify-between items-center">
+              <span className="text-green-900 font-semibold">Amount Paid:</span>
+              <span className="text-3xl font-bold text-green-700">₱{amount.toLocaleString()}</span>
+            </div>
+            <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
+              <span className="text-green-800">Payment Method:</span>
+              <span className="font-semibold text-green-900 capitalize">{method.replace('_', ' ')}</span>
+            </div>
+          </div>
+          {balanceBefore !== undefined && (
+            <div className="p-4 bg-[#faf8f5] rounded-xl">
+              <div className="flex justify-between mb-2">
+                <span className="text-[#6b6456]">Previous Balance:</span>
+                <span className="font-semibold text-[#1a2b4a]">₱{balanceBefore.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between mb-2">
+                <span className="text-[#6b6456]">Amount Paid:</span>
+                <span className="font-semibold text-green-600">-₱{amount.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between pt-2 border-t border-gray-300">
+                <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
+                <span className="font-bold text-[#1a2b4a] text-lg">₱{(balanceBefore - amount).toLocaleString()}</span>
+              </div>
+            </div>
+          )}
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
+            <p className="font-semibold mb-1">{schoolInfo.school_name}</p>
+            {schoolInfo.school_motto && <p>{schoolInfo.school_motto}</p>}
+            <p className="text-xs mt-2">Academic Year {schoolYear}</p>
+          </div>
+          <button
+            onClick={() => window.print()}
+            className="w-full px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-semibold flex items-center justify-center gap-2"
+          >
+            <Printer className="w-5 h-5" />
+            Print
+          </button>
+        </div>
+
+        {/* Print-only layout — a formal official-receipt document. Hidden on
+            screen; shown only inside the @media print rule via print:block. */}
+        <div className="hidden print:block text-black font-sans">
+          <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
+            <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
+            <div className="flex-1">
+              <p className="text-xl font-bold">{schoolInfo.school_name}</p>
+              {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
+              {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
+              {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
+                <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
+              )}
+            </div>
+            <div className="text-right shrink-0">
+              <p className="text-lg font-bold uppercase tracking-wide">Official Receipt</p>
+              <p className="text-sm font-mono">No. {reference}</p>
+              <p className="text-sm">{dateLabel}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+            <div>
+              <p className="text-xs uppercase text-gray-500">Received From</p>
+              <p className="font-semibold">{studentName}</p>
+              <p className="font-mono text-xs">{studentId}</p>
+              {grade && <p className="text-xs">{grade}</p>}
+            </div>
+            <div className="text-right">
+              <p className="text-xs uppercase text-gray-500">School Year</p>
+              <p className="font-semibold">{schoolYear}</p>
+            </div>
+          </div>
+          <table className="w-full text-sm mb-4">
+            <thead>
+              <tr className="border-t-2 border-b border-black">
+                <th className="text-left py-2 font-semibold">Description</th>
+                <th className="text-right py-2 font-semibold">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="py-2 capitalize">Tuition Payment — {method.replace('_', ' ')}</td>
+                <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-black font-bold">
+                <td className="py-2">Total Paid</td>
+                <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+          {balanceBefore !== undefined && (
+            <div className="text-sm mb-10 max-w-xs ml-auto space-y-1">
+              <div className="flex justify-between"><span>Previous Balance</span><span>₱{balanceBefore.toLocaleString()}</span></div>
+              <div className="flex justify-between"><span>Amount Paid</span><span>-₱{amount.toLocaleString()}</span></div>
+              <div className="flex justify-between font-bold border-t border-black pt-1"><span>Remaining Balance</span><span>₱{(balanceBefore - amount).toLocaleString()}</span></div>
+            </div>
+          )}
+          <div className="flex justify-between items-end mt-16 text-sm">
+            <div className="text-center">
+              <div className="border-t border-black w-44 pt-1">Authorized Signature</div>
+            </div>
+            <p className="text-xs text-gray-500 italic">THIS RECEIPT IS NOT VALID FOR CLAIM OF INPUT TAX.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Resolves the school_years.id for whatever label is currently selected in the
@@ -31,29 +224,19 @@ async function generateReceiptNumber(): Promise<string> {
   return data as string;
 }
 
-export type Scholarship = {
-  id: string;
-  scholarshipType: string;
-  amount: number | null;
-  percentDiscount: number | null;
-  awardedDate: string | null;
-  notes: string | null;
-};
-
 // Shared per-student balance calculation used by Process Payment and Student
 // Accounts: totals up real student_charges (falling back to the admin-configured
 // tuitionFees for the student's grade when no charges have been recorded yet),
-// deducts any awarded scholarship, against real payments to derive balance,
-// status, and overdue penalties. No scholarship on file => the base fee stands.
-type StudentBalance = {
+// against real payments to derive balance, status, and overdue penalties.
+export type StudentBalance = {
   id: string;
   firstName: string;
+  middleName: string | null;
   lastName: string;
+  suffix: string | null;
   gradeLevel: string;
   section: string | null;
   baseFee: number;
-  scholarship: Scholarship | null;
-  scholarshipDeduction: number;
   totalFee: number;
   paid: number;
   balance: number;
@@ -63,14 +246,37 @@ type StudentBalance = {
   penalties: number;
 };
 
-async function fetchStudentBalances(schoolYearId: string, tuitionFees: Record<string, number>): Promise<StudentBalance[]> {
-  const [{ data: students }, { data: charges }, { data: payments }, { data: scholarships }] = await Promise.all([
-    supabase.from('students').select('id, first_name, last_name, grade_level, section')
-      .eq('school_year_id', schoolYearId).eq('status', 'Active').order('last_name'),
+// "{last_name} {suffix}, {first_name} {middle_name}" — the display format used throughout
+// the Cashier portal's Process Payment and Student Accounts sections.
+function formatStudentName(b: { firstName: string; middleName?: string | null; lastName: string; suffix?: string | null }): string {
+  return `${b.lastName}${b.suffix ? ` ${b.suffix}` : ''}, ${[b.firstName, b.middleName].filter(Boolean).join(' ')}`;
+}
+
+export async function fetchStudentBalances(schoolYearId: string, tuitionFees: Record<string, number>): Promise<StudentBalance[]> {
+  // Roster comes from `enrollments` (one row per student per year) rather than filtering
+  // `students.school_year_id` directly — that column only points at whichever year each
+  // student's row was most recently re-enrolled into, so a direct filter would leave any
+  // other year's roster looking empty. See the matching note on StudentManagement's
+  // loadStudents in AdminDashboard.tsx.
+  const [{ data: enrollmentRows }, { data: charges }, { data: payments }] = await Promise.all([
+    supabase.from('enrollments')
+      .select('student_id, grade_level, section, students!inner(id, first_name, middle_name, last_name, suffix, status)')
+      .eq('school_year_id', schoolYearId).eq('students.status', 'Active'),
     supabase.from('student_charges').select('student_id, amount, due_date').eq('school_year_id', schoolYearId),
     supabase.from('payments').select('student_id, amount, paid_at').eq('school_year_id', schoolYearId),
-    supabase.from('scholarships').select('id, student_id, scholarship_type, amount, percent_discount, awarded_date, notes').eq('school_year_id', schoolYearId),
   ]);
+
+  const students = (enrollmentRows ?? [])
+    .map((row: any) => ({
+      id: row.students.id,
+      first_name: row.students.first_name,
+      middle_name: row.students.middle_name,
+      last_name: row.students.last_name,
+      suffix: row.students.suffix,
+      grade_level: row.grade_level,
+      section: row.section,
+    }))
+    .sort((a: any, b: any) => a.last_name.localeCompare(b.last_name));
 
   const chargeMap = new Map<string, { total: number; earliestDue: string | null }>();
   (charges || []).forEach((c: any) => {
@@ -88,18 +294,6 @@ async function fetchStudentBalances(schoolYearId: string, tuitionFees: Record<st
     paidMap.set(p.student_id, cur);
   });
 
-  const scholarshipMap = new Map<string, Scholarship>();
-  (scholarships || []).forEach((sc: any) => {
-    scholarshipMap.set(sc.student_id, {
-      id: sc.id,
-      scholarshipType: sc.scholarship_type,
-      amount: sc.amount != null ? Number(sc.amount) : null,
-      percentDiscount: sc.percent_discount != null ? Number(sc.percent_discount) : null,
-      awardedDate: sc.awarded_date,
-      notes: sc.notes,
-    });
-  });
-
   const today = new Date();
 
   return (students || []).map((s: any): StudentBalance => {
@@ -107,16 +301,7 @@ async function fetchStudentBalances(schoolYearId: string, tuitionFees: Record<st
     const fallbackFee = getTuitionForGrade(tuitionFees, s.grade_level);
     const baseFee = chargeInfo && chargeInfo.total > 0 ? chargeInfo.total : fallbackFee;
 
-    const scholarship = scholarshipMap.get(s.id) ?? null;
-    let scholarshipDeduction = 0;
-    if (scholarship) {
-      scholarshipDeduction = scholarship.amount != null
-        ? scholarship.amount
-        : scholarship.percentDiscount != null
-          ? baseFee * (scholarship.percentDiscount / 100)
-          : 0;
-    }
-    const totalFee = Math.max(baseFee - scholarshipDeduction, 0);
+    const totalFee = baseFee;
 
     const paidInfo = paidMap.get(s.id);
     const paid = paidInfo?.total ?? 0;
@@ -135,12 +320,12 @@ async function fetchStudentBalances(schoolYearId: string, tuitionFees: Record<st
     return {
       id: s.id,
       firstName: s.first_name,
+      middleName: s.middle_name ?? null,
       lastName: s.last_name,
+      suffix: s.suffix ?? null,
       gradeLevel: s.grade_level,
       section: s.section ?? null,
       baseFee,
-      scholarship,
-      scholarshipDeduction,
       totalFee,
       paid,
       balance,
@@ -156,15 +341,38 @@ interface CashierPortalProps {
   user: any;
   onLogout: () => void;
   tuitionFees?: Record<string, number>;
+  enrollmentFees?: Record<string, number>;
 }
 
-export function CashierPortal({ user, onLogout, tuitionFees = DEFAULT_TUITION_FEES }: CashierPortalProps) {
+export function CashierPortal({ user, onLogout, tuitionFees: tuitionFeesProp = DEFAULT_TUITION_FEES, enrollmentFees: enrollmentFeesProp = DEFAULT_ENROLLMENT_FEES }: CashierPortalProps) {
   const [activeView, setActiveView] = useState('overview');
   const [schoolYear, setSchoolYear] = useState('2025-2026');
+  // The cashier's session can outlive an admin changing fees in a different session, and
+  // the tuitionFees/enrollmentFees props are only ever set once at login — so refetch them
+  // straight from the DB here to pick up whatever the Admin has set for the current school
+  // year, instead of relying on a value that may already be stale.
+  const [tuitionFees, setTuitionFees] = useState(tuitionFeesProp);
+  const [enrollmentFees, setEnrollmentFees] = useState(enrollmentFeesProp);
+
+  const loadFees = async () => {
+    const sy = await getCurrentSchoolYear();
+    if (!sy) return;
+    setSchoolYear(sy.label);
+    const [{ data: tuitionRows }, { data: enrollmentRows }] = await Promise.all([
+      supabase.from('tuition_fees').select('grade_level, annual_fee').eq('school_year_id', sy.id),
+      supabase.from('enrollment_fees').select('grade_level, fee').eq('school_year_id', sy.id),
+    ]);
+    if (tuitionRows && tuitionRows.length > 0) {
+      setTuitionFees({ ...DEFAULT_TUITION_FEES, ...Object.fromEntries(tuitionRows.map((r: any) => [r.grade_level, Number(r.annual_fee)])) });
+    }
+    if (enrollmentRows && enrollmentRows.length > 0) {
+      setEnrollmentFees({ ...DEFAULT_ENROLLMENT_FEES, ...Object.fromEntries(enrollmentRows.map((r: any) => [r.grade_level, Number(r.fee)])) });
+    }
+  };
 
   useEffect(() => {
-    getCurrentSchoolYear().then((sy) => { if (sy) setSchoolYear(sy.label); });
-  }, []);
+    loadFees();
+  }, [activeView]);
 
   const navigation = [
     { id: 'overview', label: 'Payment Overview', icon: LayoutDashboard },
@@ -186,7 +394,7 @@ export function CashierPortal({ user, onLogout, tuitionFees = DEFAULT_TUITION_FE
       onSchoolYearChange={setSchoolYear}
     >
       {activeView === 'overview' && <PaymentOverview user={user} schoolYear={schoolYear} tuitionFees={tuitionFees} />}
-      {activeView === 'process' && <ProcessPayment schoolYear={schoolYear} tuitionFees={tuitionFees} user={user} />}
+      {activeView === 'process' && <ProcessPayment schoolYear={schoolYear} tuitionFees={tuitionFees} enrollmentFees={enrollmentFees} user={user} />}
       {activeView === 'students' && <StudentAccounts schoolYear={schoolYear} tuitionFees={tuitionFees} />}
       {activeView === 'history' && <PaymentHistory schoolYear={schoolYear} tuitionFees={tuitionFees} />}
       {activeView === 'profile' && <StaffProfileView user={user} color="#7a5c1e" />}
@@ -308,7 +516,7 @@ function PaymentOverview({ user, schoolYear, tuitionFees = DEFAULT_TUITION_FEES 
             </div>
           </div>
           <div className="w-20 h-20 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
-            <DollarSign className="w-10 h-10" />
+            <PhilippinePeso className="w-10 h-10" />
           </div>
         </div>
       </div>
@@ -320,11 +528,11 @@ function PaymentOverview({ user, schoolYear, tuitionFees = DEFAULT_TUITION_FEES 
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-semibold text-[#1a2b4a]">Today's Payments</h3>
             <div className="flex items-center gap-2">
-              <div className="relative">
+              {/* <div className="relative">
                 <button
                   onClick={() => setShowTypeFilter(!showTypeFilter)}
                   className={`px-4 py-2 border rounded-lg transition-all text-sm font-medium ${
-                    typeFilter !== 'all' ? 'border-[#c9a961] bg-[#faf8f5] text-[#1a2b4a]' : 'border-gray-200 hover:border-[#c9a961] hover:bg-[#faf8f5]'
+                    typeFilter !== 'all' ? 'border-[#c9a961] bg-[#faf8f5] text-[#1a2b4a]' : 'border-black-200 hover:border-[#c9a961] hover:bg-[#faf8f5] text-black'
                   }`}
                 >
                   <Filter className="w-4 h-4 inline mr-2" />
@@ -349,14 +557,14 @@ function PaymentOverview({ user, schoolYear, tuitionFees = DEFAULT_TUITION_FEES 
                     ))}
                   </div>
                 )}
-              </div>
-              <button
+              </div> */}
+              {/* <button
                 onClick={handleExportTodaysPayments}
                 className="px-4 py-2 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all text-sm font-medium"
               >
                 <Download className="w-4 h-4 inline mr-2" />
                 Export
-              </button>
+              </button> */}
             </div>
           </div>
           {loading ? (
@@ -367,9 +575,6 @@ function PaymentOverview({ user, schoolYear, tuitionFees = DEFAULT_TUITION_FEES 
             <div className="space-y-3">
               {filteredTodaysPayments.map((payment) => (
                 <div key={payment.id} className="flex items-center gap-4 p-4 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all">
-                  <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <CheckCircle className="w-6 h-6 text-white" />
-                  </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-1">
                       <p className="font-semibold text-[#1a2b4a]">{payment.student}</p>
@@ -396,25 +601,52 @@ function PaymentOverview({ user, schoolYear, tuitionFees = DEFAULT_TUITION_FEES 
 }
 
 // Process Payment
-function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }: { schoolYear: string; tuitionFees?: Record<string, number>; user?: any }) {
+function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, enrollmentFees = DEFAULT_ENROLLMENT_FEES, user }: { schoolYear: string; tuitionFees?: Record<string, number>; enrollmentFees?: Record<string, number>; user?: any }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStudent, setSelectedStudent] = useState<any>(null);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentCategory, setPaymentCategory] = useState<'tuition' | 'enrollment_fee'>('tuition');
   const [showReceipt, setShowReceipt] = useState(false);
   const [receiptNumber, setReceiptNumber] = useState('');
+  const [changeDue, setChangeDue] = useState(0);
+  const [amountApplied, setAmountApplied] = useState(0);
   const [schoolYearId, setSchoolYearId] = useState<string | null>(null);
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [schoolInfo, setSchoolInfo] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
+  useEffect(() => {
+    let cancelled = false;
+    getSchoolSettings().then((s) => { if (!cancelled) setSchoolInfo(s); });
+    return () => { cancelled = true; };
+  }, []);
+  // Newly-enrolled students stay on a 'pending' enrollment until the registrar confirms
+  // payment, so only the Enrollment Fee (not Tuition) can be collected for them.
+  const [enrollmentPending, setEnrollmentPending] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedStudent || !schoolYearId) { setEnrollmentPending(false); return; }
+    (async () => {
+      const { data } = await supabase
+        .from('enrollments')
+        .select('status')
+        .eq('student_id', selectedStudent.id)
+        .eq('school_year_id', schoolYearId)
+        .maybeSingle();
+      if (cancelled) return;
+      const pending = data?.status === 'pending';
+      setEnrollmentPending(pending);
+      if (pending) setPaymentCategory('enrollment_fee');
+    })();
+    return () => { cancelled = true; };
+  }, [selectedStudent, schoolYearId]);
 
   // Official Receipt (OR) number, drawn from the range the Admin registered for this
   // school year in System Settings — so the system-recorded number matches the printed
-  // physical booklet copy. Editable so the cashier can correct/skip a number by hand.
+  // physical booklet copy. Issued automatically; the cashier no longer types it in.
   const [orRange, setOrRange] = useState<{ start: string; end: string; next: string } | null>(null);
-  const [nextReceiptNumber, setNextReceiptNumber] = useState('');
-  const [editingReceiptNumber, setEditingReceiptNumber] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -423,10 +655,8 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
       if (cancelled) return;
       if (sy?.or_range_start && sy?.or_range_end && sy?.or_next_number) {
         setOrRange({ start: sy.or_range_start, end: sy.or_range_end, next: sy.or_next_number });
-        setNextReceiptNumber(sy.or_next_number);
       } else {
         setOrRange(null);
-        setNextReceiptNumber('');
       }
     })();
     return () => { cancelled = true; };
@@ -442,7 +672,7 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
     const balances = await fetchStudentBalances(syId, tuitionFees);
     setStudents(balances.map(b => ({
       id: b.id,
-      name: `${b.firstName} ${b.lastName}`,
+      name: formatStudentName(b),
       grade: b.section ? `${b.gradeLevel}, ${b.section}` : b.gradeLevel,
       paid: b.paid,
       totalFee: b.totalFee,
@@ -464,19 +694,54 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
     s.id.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // While enrollment is still pending, the amount owed is the admin-configured enrollment
+  // fee for this grade — not the tuition-based totalFee/balance, which don't apply until
+  // the registrar confirms enrollment.
+  const enrollmentFeeAmount = selectedStudent ? getTuitionForGrade(enrollmentFees, selectedStudent.grade) : 0;
+  const displayTotalFee = selectedStudent ? (enrollmentPending ? enrollmentFeeAmount : selectedStudent.totalFee) : 0;
+  const displayBalance = selectedStudent ? (enrollmentPending ? Math.max(enrollmentFeeAmount - selectedStudent.paid, 0) : selectedStudent.balance) : 0;
+
   const handleProcessPayment = async () => {
     if (!selectedStudent || !paymentAmount || !schoolYearId) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      // When the Admin has registered a physical OR range for this school year, issue
-      // from it (so the system record matches the printed booklet copy); otherwise fall
-      // back to the system's own auto-generated sequence.
-      const newReceiptNumber = orRange ? (nextReceiptNumber.trim() || orRange.next) : await generateReceiptNumber();
+      const cashReceived = parseFloat(paymentAmount);
+      const totalDue = displayBalance + selectedStudent.penalties;
+      // Cash beyond what's actually owed is change, not part of the recorded payment.
+      const applied = Math.min(cashReceived, totalDue);
+
+      // Re-fetch the Admin's receipt range fresh (rather than trusting component state,
+      // which can go stale between page load and submit). When the Admin has registered a
+      // physical OR range for this school year, claim the next number atomically via the
+      // claim_or_receipt_number RPC (a SECURITY DEFINER function that locks the row and
+      // advances or_next_number server-side), so two concurrent payments can never draw
+      // the same number. A client-side compare-and-swap update was tried here previously,
+      // but school_years only allows UPDATE from full_admin under RLS — cashiers' updates
+      // were silently filtered to zero rows every time, which always exhausted the retry
+      // loop and surfaced as "Could not claim a unique receipt number after several
+      // attempts." The RPC runs as the function owner and so isn't subject to that policy.
+      // When no OR range is configured, fall back to the system's own auto-generated
+      // sequence.
+      let newReceiptNumber: string;
+      const syRow = await getSchoolYearByLabel(schoolYear);
+      const hasOrRange = !!(syRow?.or_range_start && syRow?.or_range_end && syRow?.or_next_number);
+      if (!hasOrRange) {
+        newReceiptNumber = await generateReceiptNumber();
+      } else {
+        const { data: claimed, error: claimError } = await supabase.rpc('claim_or_receipt_number', {
+          p_school_year_id: syRow!.id,
+        });
+        if (claimError) throw claimError;
+        newReceiptNumber = claimed as string;
+        const refreshed = await getSchoolYearByLabel(schoolYear);
+        setOrRange({ start: syRow!.or_range_start!, end: syRow!.or_range_end!, next: refreshed?.or_next_number ?? syRow!.or_next_number! });
+      }
+
       const { error } = await supabase.from('payments').insert({
         student_id: selectedStudent.id,
         school_year_id: schoolYearId,
-        amount: parseFloat(paymentAmount),
+        amount: applied,
         method: 'Cash',
         recorded_by: user?.employeeId || null,
         description: paymentCategory === 'enrollment_fee' ? 'Enrollment Fee' : 'Tuition Payment',
@@ -485,20 +750,9 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
       });
       if (error) throw error;
       setReceiptNumber(newReceiptNumber);
+      setAmountApplied(applied);
+      setChangeDue(Math.max(0, cashReceived - totalDue));
       setShowReceipt(true);
-
-      if (orRange) {
-        // Advance the pointer to the next number in the range (best-effort numeric increment;
-        // if the cashier typed a non-numeric override, just re-save what's there).
-        const parsed = parseInt(newReceiptNumber, 10);
-        const advanced = !isNaN(parsed) ? String(parsed + 1).padStart(newReceiptNumber.length, '0') : newReceiptNumber;
-        const syRow = await getSchoolYearByLabel(schoolYear);
-        if (syRow) {
-          await supabase.from('school_years').update({ or_next_number: advanced }).eq('id', syRow.id);
-        }
-        setOrRange(prev => prev ? { ...prev, next: advanced } : prev);
-        setNextReceiptNumber(advanced);
-      }
 
       // Refresh the roster in the background so the next payment reflects this one.
       loadStudents();
@@ -531,65 +785,76 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
       </div>
 
       {!showReceipt ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="space-y-6">
           {/* Student Search & Selection */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Select Student</h3>
-            
+
             {/* Search Bar */}
-            <div className="relative mb-4">
+            <div className="relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6b6456]" />
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(e) => { setSearchTerm(e.target.value); setSelectedStudent(null); }}
                 placeholder="Search by name or student ID..."
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
               />
             </div>
 
-            {/* Student List */}
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {loading ? (
-                <p className="text-sm text-[#8b8476] text-center py-8">Loading students...</p>
-              ) : filteredStudents.length === 0 ? (
-                <p className="text-sm text-[#8b8476] text-center py-8">No students found.</p>
-              ) : filteredStudents.map((student) => (
+            {selectedStudent ? (
+              <div className="mt-4 flex items-start justify-between gap-3 p-4 rounded-lg border-2 border-[#c9a961] bg-[#c9a961]/5">
+                <div>
+                  <p className="font-semibold text-[#1a2b4a]">{selectedStudent.name}</p>
+                  <p className="text-sm text-[#6b6456]">{selectedStudent.grade}</p>
+                  <p className="text-xs text-[#8b8476] mt-1">ID: {selectedStudent.id}</p>
+                </div>
                 <button
-                  key={student.id}
-                  onClick={() => setSelectedStudent(student)}
-                  className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
-                    selectedStudent?.id === student.id
-                      ? 'border-[#c9a961] bg-[#c9a961]/5'
-                      : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
-                  }`}
+                  onClick={() => { setSelectedStudent(null); setSearchTerm(''); }}
+                  className="shrink-0 text-sm font-medium text-[#1a2b4a] hover:underline"
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="font-semibold text-[#1a2b4a]">{student.name}</p>
-                      <p className="text-sm text-[#6b6456]">{student.grade}</p>
-                      <p className="text-xs text-[#8b8476] mt-1">ID: {student.id}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className={`text-lg font-bold ${(student.balance + student.penalties) === 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        ₱{(student.balance + student.penalties).toLocaleString()}
-                      </p>
-                      <p className="text-xs text-[#8b8476]">Total Due</p>
-                      {student.penalties > 0 && (
-                        <p className="text-xs text-orange-600 mt-1">+₱{student.penalties.toLocaleString()} penalty</p>
-                      )}
-                    </div>
-                  </div>
+                  Change
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : searchTerm ? (
+              <div className="mt-4 space-y-2 max-h-96 overflow-y-auto">
+                {loading ? (
+                  <p className="text-sm text-[#8b8476] text-center py-8">Loading students...</p>
+                ) : filteredStudents.length === 0 ? (
+                  <p className="text-sm text-[#8b8476] text-center py-8">No students found.</p>
+                ) : filteredStudents.map((student) => (
+                  <button
+                    key={student.id}
+                    onClick={() => setSelectedStudent(student)}
+                    className="w-full p-4 rounded-lg border-2 border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5] transition-all text-left"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="font-semibold text-[#1a2b4a]">{student.name}</p>
+                        <p className="text-sm text-[#6b6456]">{student.grade}</p>
+                        <p className="text-xs text-[#8b8476] mt-1">ID: {student.id}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-lg font-bold ${(student.balance + student.penalties) === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          ₱{(student.balance + student.penalties).toLocaleString()}
+                        </p>
+                        <p className="text-xs text-[#8b8476]">Total Due</p>
+                        {student.penalties > 0 && (
+                          <p className="text-xs text-orange-600 mt-1">+₱{student.penalties.toLocaleString()} penalty</p>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {/* Payment Form */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Payment Details</h3>
+          {selectedStudent && (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-[#1a2b4a] mb-4">Payment Details</h3>
 
-            {selectedStudent ? (
               <div className="space-y-4">
                 {/* Student Summary */}
                 <div className="p-4 bg-[#faf8f5] rounded-xl border border-gray-200">
@@ -599,8 +864,8 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                       <span className="font-semibold text-[#1a2b4a]">{selectedStudent.name}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#6b6456]">Total Fee:</span>
-                      <span className="font-semibold text-[#1a2b4a]">₱{selectedStudent.totalFee.toLocaleString()}</span>
+                      <span className="text-[#6b6456]">{enrollmentPending ? 'Enrollment Fee:' : 'Total Fee:'}</span>
+                      <span className="font-semibold text-[#1a2b4a]">₱{displayTotalFee.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#6b6456]">Already Paid:</span>
@@ -608,7 +873,7 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                     </div>
                     <div className="flex justify-between">
                       <span className="text-[#6b6456]">Balance Due:</span>
-                      <span className="font-semibold text-[#1a2b4a]">₱{selectedStudent.balance.toLocaleString()}</span>
+                      <span className="font-semibold text-[#1a2b4a]">₱{displayBalance.toLocaleString()}</span>
                     </div>
                     {selectedStudent.penalties > 0 && (
                       <div className="flex justify-between">
@@ -623,7 +888,7 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                     )}
                     <div className="flex justify-between pt-2 border-t border-gray-300">
                       <span className="text-[#6b6456] font-semibold">Total Amount Due:</span>
-                      <span className="font-bold text-red-600 text-lg">₱{(selectedStudent.balance + selectedStudent.penalties).toLocaleString()}</span>
+                      <span className="font-bold text-red-600 text-lg">₱{(displayBalance + selectedStudent.penalties).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -640,25 +905,12 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                       value={paymentAmount}
                       onChange={(e) => setPaymentAmount(e.target.value)}
                       placeholder="0.00"
-                      max={selectedStudent.balance}
+                      max={20000}
                       min={0}
-                      className="w-full pl-8 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-lg font-semibold"
+                      className="w-full pl-8 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-lg font-semibold text-black"
                     />
                   </div>
-                  <div className="mt-2 flex gap-2">
-                    <button 
-                      onClick={() => setPaymentAmount(String(selectedStudent.balance))}
-                      className="px-3 py-1 bg-[#faf8f5] border border-gray-200 rounded-lg text-xs font-medium hover:bg-[#eae7e0] transition-all"
-                    >
-                      Full Balance
-                    </button>
-                    <button 
-                      onClick={() => setPaymentAmount(String(selectedStudent.balance / 2))}
-                      className="px-3 py-1 bg-[#faf8f5] border border-gray-200 rounded-lg text-xs font-medium hover:bg-[#eae7e0] transition-all"
-                    >
-                      Half Payment
-                    </button>
-                  </div>
+                  <p className="mt-1 text-xs text-[#8b8476]">Cash received may exceed the balance due — change will be computed automatically. Max ₱20,000 per transaction.</p>
                 </div>
 
                 {/* Payment For */}
@@ -673,8 +925,17 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                     ].map((c) => (
                       <button
                         key={c.value}
-                        onClick={() => setPaymentCategory(c.value as 'tuition' | 'enrollment_fee')}
-                        className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                        disabled={c.value === 'tuition' ? enrollmentPending : !enrollmentPending}
+                        onClick={() => {
+                          setPaymentCategory(c.value as 'tuition' | 'enrollment_fee');
+                          // Clicking Enrollment Fee replaces whatever is in the Payment
+                          // Amount field with the admin-configured fee for this student's
+                          // grade level — it doesn't add to or combine with anything else.
+                          if (c.value === 'enrollment_fee') {
+                            setPaymentAmount(String(getTuitionForGrade(enrollmentFees, selectedStudent.grade)));
+                          }
+                        }}
+                        className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                           paymentCategory === c.value
                             ? 'border-[#c9a961] bg-[#c9a961]/10 text-[#1a2b4a]'
                             : 'border-gray-200 text-[#6b6456] hover:border-[#c9a961]/50'
@@ -684,38 +945,16 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                       </button>
                     ))}
                   </div>
-                </div>
-
-                {/* Official Receipt Number */}
-                <div>
-                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">Official Receipt No.</label>
-                  {orRange ? (
-                    <div className="flex items-center gap-2">
-                      {editingReceiptNumber ? (
-                        <input
-                          type="text"
-                          value={nextReceiptNumber}
-                          onChange={(e) => setNextReceiptNumber(e.target.value)}
-                          onBlur={() => setEditingReceiptNumber(false)}
-                          autoFocus
-                          className="flex-1 px-4 py-3 border-2 border-[#c9a961] rounded-xl font-mono focus:outline-none focus:ring-4 focus:ring-[#c9a961]/10"
-                        />
-                      ) : (
-                        <div className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl font-mono bg-[#faf8f5]">{nextReceiptNumber}</div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setEditingReceiptNumber(v => !v)}
-                        title="Edit receipt number"
-                        className="p-3 border-2 border-gray-200 rounded-xl hover:border-[#c9a961] transition-all"
-                      >
-                        <Edit className="w-4 h-4 text-[#6b6456]" />
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-[#8b8476]">No official receipt range is set for this school year — a system-generated number will be issued. Ask the Admin to register one in System Settings.</p>
+                  {enrollmentPending && (
+                    <p className="mt-2 text-xs text-amber-700">This student's enrollment is still pending — the enrollment fee must be paid and the registrar must confirm the enrollment before tuition can be collected.</p>
                   )}
                 </div>
+
+                {/* Official Receipt Number is issued automatically from the range the Admin
+                    registered in System Settings — no manual entry needed. */}
+                {!orRange && (
+                  <p className="text-xs text-[#8b8476]">No official receipt range is set for this school year — a system-generated number will be issued. Ask the Admin to register one in System Settings.</p>
+                )}
 
                 {/* Process Button */}
                 {submitError && (
@@ -723,30 +962,26 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
                 )}
                 <button
                   onClick={handleProcessPayment}
-                  disabled={submitting || !paymentAmount || parseFloat(paymentAmount) <= 0 || parseFloat(paymentAmount) > selectedStudent.balance}
+                  disabled={submitting || !paymentAmount || parseFloat(paymentAmount) <= 0 || parseFloat(paymentAmount) > 20000}
                   className="w-full bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   <CreditCard className="w-5 h-5" />
                   {submitting ? 'Processing...' : 'Process Payment'}
                 </button>
               </div>
-            ) : (
-              <div className="text-center py-12">
-                <User className="w-16 h-16 text-[#6b6456] mx-auto mb-4" />
-                <p className="text-[#6b6456] font-medium">Select a student to process payment</p>
-                <p className="text-sm text-[#8b8476] mt-1">Search and select from the list on the left</p>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       ) : (
         /* Receipt */
         <div className="max-w-2xl mx-auto">
-          <div className="bg-white rounded-xl shadow-lg border-2 border-[#c9a961] p-8">
+          <div className="bg-white rounded-xl shadow-lg border-2 border-[#c9a961] p-8 print-receipt">
             <div className="text-center mb-6 pb-6 border-b-2 border-dashed border-gray-300">
-              <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4 print:hidden">
                 <CheckCircle className="w-10 h-10 text-white" />
               </div>
+              <img src={schoolLogo} alt="School Logo" className="w-12 h-12 object-contain mx-auto mb-2 hidden print:block" />
+              <p className="font-bold text-[#1a2b4a] hidden print:block">{schoolInfo.school_name}</p>
               <h2 className="text-2xl font-bold text-green-600 mb-2">Payment Successful!</h2>
               <p className="text-[#6b6456]">Official Receipt</p>
             </div>
@@ -781,9 +1016,15 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
               <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
                 <p className="text-sm text-green-800 mb-2">Payment Details</p>
                 <div className="flex justify-between items-center">
-                  <span className="text-green-900 font-semibold">Amount Paid:</span>
+                  <span className="text-green-900 font-semibold">Cash Received:</span>
                   <span className="text-3xl font-bold text-green-700">₱{parseFloat(paymentAmount).toLocaleString()}</span>
                 </div>
+                {changeDue > 0 && (
+                  <div className="mt-3 pt-3 border-t border-green-300 flex justify-between items-center">
+                    <span className="text-green-900 font-semibold">Change:</span>
+                    <span className="text-xl font-bold text-green-700">₱{changeDue.toLocaleString()}</span>
+                  </div>
+                )}
                 <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
                   <span className="text-green-800">Payment Method:</span>
                   <span className="font-semibold text-green-900">Cash</span>
@@ -792,34 +1033,37 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, user }
 
               <div className="p-4 bg-[#faf8f5] rounded-xl">
                 <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Previous Balance:</span>
-                  <span className="font-semibold text-[#1a2b4a]">₱{selectedStudent?.balance.toLocaleString()}</span>
+                  <span className="text-[#6b6456]">Previous Balance Due:</span>
+                  <span className="font-semibold text-[#1a2b4a]">₱{((selectedStudent?.balance ?? 0) + (selectedStudent?.penalties ?? 0)).toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Amount Paid:</span>
-                  <span className="font-semibold text-green-600">-₱{parseFloat(paymentAmount).toLocaleString()}</span>
+                  <span className="text-[#6b6456]">Amount Applied:</span>
+                  <span className="font-semibold text-green-600">-₱{amountApplied.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-gray-300">
                   <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
                   <span className="font-bold text-[#1a2b4a] text-lg">
-                    ₱{(selectedStudent?.balance - parseFloat(paymentAmount)).toLocaleString()}
+                    ₱{Math.max(0, (selectedStudent?.balance ?? 0) + (selectedStudent?.penalties ?? 0) - amountApplied).toLocaleString()}
                   </span>
                 </div>
               </div>
 
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
-                <p className="font-semibold mb-1">Dumaguete Mission School</p>
-                <p>Christian Truth, Shaping Lives...</p>
+                <p className="font-semibold mb-1">{schoolInfo.school_name}</p>
+                {schoolInfo.school_motto && <p>{schoolInfo.school_motto}</p>}
                 <p className="text-xs mt-2">Academic Year {schoolYear}</p>
               </div>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 print:hidden">
               <button
                 onClick={() => {
                   setShowReceipt(false);
                   setSelectedStudent(null);
+                  setSearchTerm('');
                   setPaymentAmount('');
+                  setChangeDue(0);
+                  setAmountApplied(0);
                   setSubmitError(null);
                 }}
                 className="flex-1 px-6 py-3 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all font-semibold flex items-center justify-center gap-2"
@@ -848,24 +1092,28 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
   const [filterStatus, setFilterStatus] = useState('all');
   const [viewDetailsStudent, setViewDetailsStudent] = useState<any>(null);
   const [printStatementStudent, setPrintStatementStudent] = useState<any>(null);
+  const [receiptPayment, setReceiptPayment] = useState<any>(null);
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [paymentsByStudent, setPaymentsByStudent] = useState<Record<string, { date: string; amount: number; method: string; reference: string }[]>>({});
-  const [schoolYearId, setSchoolYearId] = useState<string | null>(null);
+  const [schoolInfo, setSchoolInfo] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
+  useEffect(() => {
+    let cancelled = false;
+    getSchoolSettings().then((s) => { if (!cancelled) setSchoolInfo(s); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Each student's tuition is looked up from real student_charges (falling back to
-  // the admin-configured tuitionFees for their grade), net of any scholarship on
-  // file for the year; balance is derived so it stays consistent with what's
-  // actually been charged and paid in the database.
+  // the admin-configured tuitionFees for their grade); balance is derived so it
+  // stays consistent with what's actually been charged and paid in the database.
   const loadStudents = async () => {
     setLoading(true);
     const syId = await fetchSchoolYearId(schoolYear);
-    setSchoolYearId(syId);
     if (!syId) { setStudents([]); setPaymentsByStudent({}); setLoading(false); return; }
 
     const [balances, { data: payments }] = await Promise.all([
       fetchStudentBalances(syId, tuitionFees),
-      supabase.from('payments').select('student_id, amount, method, or_number, paid_at').eq('school_year_id', syId).order('paid_at', { ascending: false }),
+      supabase.from('payments').select('student_id, amount, method, receipt_number, paid_at').eq('school_year_id', syId).order('paid_at', { ascending: false }),
     ]);
 
     const byStudent: Record<string, { date: string; amount: number; method: string; reference: string }[]> = {};
@@ -875,19 +1123,17 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
         date: new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         amount: Number(p.amount),
         method: p.method,
-        reference: p.or_number || '-',
+        reference: p.receipt_number || '-',
       });
     });
     setPaymentsByStudent(byStudent);
 
     setStudents(balances.map(b => ({
       id: b.id,
-      name: `${b.firstName} ${b.lastName}`,
+      name: formatStudentName(b),
       grade: b.section ? `${b.gradeLevel}, ${b.section}` : b.gradeLevel,
       paid: b.paid,
       baseFee: b.baseFee,
-      scholarship: b.scholarship,
-      scholarshipDeduction: b.scholarshipDeduction,
       totalFee: b.totalFee,
       balance: b.balance,
       status: b.status,
@@ -905,37 +1151,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
     loadStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schoolYear, tuitionFees]);
-
-  const [showScholarshipForm, setShowScholarshipForm] = useState(false);
-
-  // Re-derives just one student's balance (cheaper than a full reload) after a
-  // scholarship is added, edited, or removed, and keeps both the list row and
-  // the open details modal in sync with the new net tuition.
-  const refreshStudent = async (studentId: string) => {
-    if (!schoolYearId) return;
-    const balances = await fetchStudentBalances(schoolYearId, tuitionFees);
-    const b = balances.find(x => x.id === studentId);
-    if (!b) return;
-    const mapped = {
-      id: b.id,
-      name: `${b.firstName} ${b.lastName}`,
-      grade: b.section ? `${b.gradeLevel}, ${b.section}` : b.gradeLevel,
-      paid: b.paid,
-      baseFee: b.baseFee,
-      scholarship: b.scholarship,
-      scholarshipDeduction: b.scholarshipDeduction,
-      totalFee: b.totalFee,
-      balance: b.balance,
-      status: b.status,
-      lastPayment: b.lastPaymentDate
-        ? new Date(b.lastPaymentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-        : 'No payments yet',
-      monthsOverdue: b.monthsOverdue,
-      penalties: b.penalties,
-    };
-    setStudents(prev => prev.map(s => (s.id === studentId ? mapped : s)));
-    setViewDetailsStudent((prev: any) => (prev && prev.id === studentId ? mapped : prev));
-  };
 
   const paymentHistory = paymentsByStudent[(viewDetailsStudent || printStatementStudent)?.id] || [];
 
@@ -977,7 +1192,7 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search by name or student ID..."
-              className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+              className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
             />
           </div>
           <div className="flex gap-2">
@@ -1032,7 +1247,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
             <thead className="bg-[#faf8f5] border-b border-gray-200">
               <tr>
                 <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Student</th>
-                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Grade</th>
                 <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Total Fee</th>
                 <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Paid</th>
                 <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Penalties</th>
@@ -1044,9 +1258,9 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan={9} className="px-6 py-8 text-center text-sm text-[#8b8476]">Loading student accounts...</td></tr>
+                <tr><td colSpan={8} className="px-6 py-8 text-center text-sm text-[#8b8476]">Loading student accounts...</td></tr>
               ) : filteredStudents.length === 0 ? (
-                <tr><td colSpan={9} className="px-6 py-8 text-center text-sm text-[#8b8476]">No students found.</td></tr>
+                <tr><td colSpan={8} className="px-6 py-8 text-center text-sm text-[#8b8476]">No students found.</td></tr>
               ) : filteredStudents.map((student) => (
                 <tr key={student.id} className="hover:bg-[#faf8f5] transition-colors">
                   <td className="px-6 py-4">
@@ -1055,7 +1269,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                       <p className="text-xs text-[#8b8476] font-mono">{student.id}</p>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-[#6b6456]">{student.grade}</td>
                   <td className="px-6 py-4 text-right font-semibold text-[#2c2c2c]">₱{student.totalFee.toLocaleString()}</td>
                   <td className="px-6 py-4 text-right font-semibold text-green-600">₱{student.paid.toLocaleString()}</td>
                   <td className="px-6 py-4 text-right">
@@ -1117,8 +1330,8 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
 
       {/* View Details Modal */}
       {viewDetailsStudent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold text-[#1a2b4a]">Student Details</h2>
               <button
@@ -1138,7 +1351,7 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                   <p className="text-sm text-[#8b8476] font-mono">{viewDetailsStudent.id}</p>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-[#6b6456] mb-1">Grade:</p>
                   <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.grade}</p>
@@ -1146,11 +1359,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                 <div>
                   <p className="text-sm text-[#6b6456] mb-1">Total Fee:</p>
                   <p className="font-semibold text-[#1a2b4a]">₱{viewDetailsStudent.totalFee.toLocaleString()}</p>
-                  {viewDetailsStudent.scholarshipDeduction > 0 && (
-                    <p className="text-xs text-[#8b8476] mt-1">
-                      (Base ₱{viewDetailsStudent.baseFee.toLocaleString()} − Scholarship ₱{viewDetailsStudent.scholarshipDeduction.toLocaleString()})
-                    </p>
-                  )}
                 </div>
                 <div>
                   <p className="text-sm text-[#6b6456] mb-1">Already Paid:</p>
@@ -1180,44 +1388,14 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-gray-200">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-lg font-bold text-[#1a2b4a]">Scholarship</h3>
-                  <button
-                    onClick={() => setShowScholarshipForm(true)}
-                    className="text-xs font-semibold text-[#c9a961] hover:text-[#b8994f]"
-                  >
-                    {viewDetailsStudent.scholarship ? 'Edit' : 'Add Scholarship'}
-                  </button>
-                </div>
-                {viewDetailsStudent.scholarship ? (
-                  <div className="bg-[#faf8f5] border border-gray-200 rounded-lg p-3 text-sm">
-                    <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.scholarship.scholarshipType}</p>
-                    <p className="text-[#6b6456]">
-                      {viewDetailsStudent.scholarship.amount != null
-                        ? `₱${viewDetailsStudent.scholarship.amount.toLocaleString()} off`
-                        : `${viewDetailsStudent.scholarship.percentDiscount}% off`}
-                    </p>
-                    {viewDetailsStudent.scholarship.notes && (
-                      <p className="text-xs text-[#8b8476] mt-1">{viewDetailsStudent.scholarship.notes}</p>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-[#8b8476]">No scholarship on file — the original base fee applies.</p>
-                )}
-              </div>
-
               <div className="mt-6">
-                <h3 className="text-lg font-bold text-[#1a2b4a] mb-2">Payment History</h3>
+                <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {paymentHistory.length === 0 && (
                     <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
                   )}
                   {paymentHistory.map((payment, idx) => (
                     <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all gap-3">
-                      <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <CheckCircle className="w-6 h-6 text-white" />
-                      </div>
                       <div className="flex-1">
                         <div className="grid grid-cols-2 gap-4 mb-1">
                           <div>
@@ -1242,6 +1420,13 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                           <span className="font-mono">{payment.reference}</span>
                         </div>
                       </div>
+                      <button
+                        onClick={() => setReceiptPayment(payment)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] bg-white hover:border-[#c9a961] transition-all whitespace-nowrap shrink-0"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>View Receipt</span>
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1251,24 +1436,26 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
         </div>
       )}
 
-      {showScholarshipForm && viewDetailsStudent && (
-        <ScholarshipFormModal
-          studentId={viewDetailsStudent.id}
-          studentName={viewDetailsStudent.name}
-          schoolYearId={schoolYearId}
-          baseFee={viewDetailsStudent.baseFee}
-          existing={viewDetailsStudent.scholarship}
-          onClose={() => setShowScholarshipForm(false)}
-          onSaved={() => { setShowScholarshipForm(false); refreshStudent(viewDetailsStudent.id); }}
+      {receiptPayment && (
+        <ReceiptModal
+          studentName={viewDetailsStudent?.name}
+          studentId={viewDetailsStudent?.id}
+          grade={viewDetailsStudent?.grade}
+          reference={receiptPayment.reference}
+          amount={receiptPayment.amount}
+          method={receiptPayment.method}
+          dateLabel={receiptPayment.date}
+          schoolYear={schoolYear}
+          onClose={() => setReceiptPayment(null)}
         />
       )}
 
       {/* Print Statement Modal */}
       {printStatementStudent && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-[#1a2b4a]">Print Statement</h2>
+          <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none print-receipt">
+            <div className="flex items-center justify-between mb-6 print:hidden">
+              <h2 className="text-xl font-bold text-[#1a2b4a]">Print Statement of Accounts</h2>
               <button
                 onClick={() => setPrintStatementStudent(null)}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-all"
@@ -1276,7 +1463,7 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                 <XCircle className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <div className="space-y-4">
+            <div className="space-y-4 print:hidden">
               <div className="flex items-center gap-4">
                 <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
                   <User className="w-6 h-6 text-white" />
@@ -1335,16 +1522,14 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                 </div>
               </div>
               <div className="mt-6">
-                <h3 className="text-lg font-bold text-[#1a2b4a]">Payment History</h3>
+                <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {paymentHistory.length === 0 && (
                     <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
                   )}
                   {paymentHistory.map((payment, idx) => (
                     <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all">
-                      <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <CheckCircle className="w-6 h-6 text-white" />
-                      </div>
+                      
                       <div className="flex-1">
                         <div className="flex items-center justify-between mb-1">
                           <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.name}</p>
@@ -1374,6 +1559,118 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
                 </button>
               </div>
             </div>
+
+            {/* Print-only layout — mirrors the school's Statement of Account document.
+                Hidden on screen; shown only inside the @media print rule via print:block. */}
+            <div className="hidden print:block text-black font-sans text-sm">
+              <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
+                <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
+                <div className="flex-1">
+                  <p className="text-xl font-bold uppercase">{schoolInfo.school_name}</p>
+                  {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
+                  {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
+                  {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
+                    <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
+                  )}
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-lg font-bold uppercase tracking-wide">Statement of Account</p>
+                  <p className="text-xs">S.Y. {schoolYear} | Statement for {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 mb-5">
+                <div>
+                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Student</p>
+                  <div className="text-xs space-y-0.5">
+                    <p className="flex justify-between"><span className="text-gray-600">Student No.</span><span className="font-mono">{printStatementStudent.id}</span></p>
+                    <p className="flex justify-between"><span className="text-gray-600">Name</span><span className="font-semibold">{printStatementStudent.name}</span></p>
+                    <p className="flex justify-between"><span className="text-gray-600">Grade</span><span className="font-semibold">{printStatementStudent.grade}</span></p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Statement Details</p>
+                  <div className="text-xs space-y-0.5">
+                    <p className="flex justify-between"><span className="text-gray-600">School Year</span><span className="font-semibold">{schoolYear}</span></p>
+                    <p className="flex justify-between"><span className="text-gray-600">Statement Month</span><span className="font-semibold">{new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span></p>
+                    <p className="flex justify-between"><span className="text-gray-600">Status</span><span className="font-semibold">
+                      {printStatementStudent.status === 'paid' && 'Paid'}
+                      {printStatementStudent.status === 'partial' && 'Partial'}
+                      {printStatementStudent.status === 'overdue' && 'Overdue'}
+                    </span></p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-5 pb-5 border-b border-gray-300">
+                <p className="text-sm font-bold uppercase tracking-wide">
+                  Tuition Payment Due — {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </p>
+                <p className="text-xs text-gray-500 mb-2">Includes outstanding balance and late surcharge.</p>
+                <p className="text-4xl font-bold mb-2">₱{(printStatementStudent.balance + printStatementStudent.penalties).toLocaleString()}</p>
+                <div className="text-xs space-y-0.5 max-w-xs">
+                  <p className="flex justify-between"><span>Balance Due</span><span>₱{printStatementStudent.balance.toLocaleString()}</span></p>
+                  {printStatementStudent.penalties > 0 && (
+                    <p className="flex justify-between">
+                      <span>Late Surcharge ({printStatementStudent.monthsOverdue} {printStatementStudent.monthsOverdue === 1 ? 'month' : 'months'} × ₱200)</span>
+                      <span>₱{printStatementStudent.penalties.toLocaleString()}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 mb-5">
+                <div>
+                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Account Totals</p>
+                  <div className="text-xs space-y-0.5">
+                    <p className="flex justify-between"><span>Current Charges</span><span className="font-semibold">₱{printStatementStudent.totalFee.toLocaleString()}</span></p>
+                    <p className="flex justify-between"><span>Posted Payments</span><span className="font-semibold">₱{printStatementStudent.paid.toLocaleString()}</span></p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Payment Status</p>
+                  <div className="text-xs space-y-0.5">
+                    <p className="flex justify-between"><span className="text-gray-600">Last Payment</span><span className="font-semibold">{paymentHistory[0]?.date || '—'}</span></p>
+                    {paymentHistory[0] && (
+                      <>
+                        <p className="flex justify-between"><span className="text-gray-600">Receipt</span><span className="font-mono">{paymentHistory[0].reference}</span></p>
+                        <p className="flex justify-between"><span className="text-gray-600">Amount</span><span className="font-semibold">₱{paymentHistory[0].amount.toLocaleString()}</span></p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <p className="text-xs uppercase font-bold tracking-wide mb-2">Payment History</p>
+                {paymentHistory.length === 0 ? (
+                  <p className="text-xs text-gray-500">No payments recorded yet.</p>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b-2 border-black">
+                        <th className="text-left py-1.5 font-semibold">Date</th>
+                        <th className="text-left py-1.5 font-semibold">Receipt No.</th>
+                        <th className="text-right py-1.5 font-semibold">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paymentHistory.map((payment, idx) => (
+                        <tr key={`${payment.date}-${idx}`} className="border-b border-gray-300">
+                          <td className="py-1">{payment.date}</td>
+                          <td className="py-1 font-mono">{payment.reference}</td>
+                          <td className="py-1 text-right">₱{payment.amount.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <p className="text-center text-xs text-gray-500 italic">
+                Please keep this statement for your records. Contact the school office for questions or corrections.
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -1381,175 +1678,11 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
   );
 }
 
-// Add/Edit Scholarship — writes directly to the `scholarships` table (student_id,
-// school_year_id, scholarship_type, amount OR percent_discount, notes). Only one of
-// amount/percent_discount is saved at a time; fetchStudentBalances() picks whichever
-// is set to compute the deduction, so switching modes here just nulls out the other.
-function ScholarshipFormModal({ studentId, studentName, schoolYearId, baseFee, existing, onClose, onSaved }: {
-  studentId: string;
-  studentName: string;
-  schoolYearId: string | null;
-  baseFee: number;
-  existing: Scholarship | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [scholarshipType, setScholarshipType] = useState(existing?.scholarshipType ?? '');
-  const [mode, setMode] = useState<'amount' | 'percent'>(existing?.percentDiscount != null ? 'percent' : 'amount');
-  const [amount, setAmount] = useState(existing?.amount != null ? String(existing.amount) : '');
-  const [percent, setPercent] = useState(existing?.percentDiscount != null ? String(existing.percentDiscount) : '');
-  const [notes, setNotes] = useState(existing?.notes ?? '');
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSave = async () => {
-    if (!schoolYearId) return;
-    if (!scholarshipType.trim()) { setError('Please enter a scholarship type.'); return; }
-    const amountValue = mode === 'amount' ? parseFloat(amount) : null;
-    const percentValue = mode === 'percent' ? parseFloat(percent) : null;
-    if (mode === 'amount' && (isNaN(amountValue as number) || (amountValue as number) < 0)) {
-      setError('Please enter a valid deduction amount.');
-      return;
-    }
-    if (mode === 'percent' && (isNaN(percentValue as number) || (percentValue as number) < 0 || (percentValue as number) > 100)) {
-      setError('Please enter a valid percent between 0 and 100.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    const payload = {
-      student_id: studentId,
-      school_year_id: schoolYearId,
-      scholarship_type: scholarshipType.trim(),
-      amount: amountValue,
-      percent_discount: percentValue,
-      notes: notes.trim() || null,
-    };
-    const { error: saveError } = existing
-      ? await supabase.from('scholarships').update(payload).eq('id', existing.id)
-      : await supabase.from('scholarships').insert(payload);
-    setSaving(false);
-    if (saveError) { setError(saveError.message); return; }
-    onSaved();
-  };
-
-  const handleRemove = async () => {
-    if (!existing) return;
-    setRemoving(true);
-    setError(null);
-    const { error: deleteError } = await supabase.from('scholarships').delete().eq('id', existing.id);
-    setRemoving(false);
-    if (deleteError) { setError(deleteError.message); return; }
-    onSaved();
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
-      <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-[#1a2b4a]">{existing ? 'Edit' : 'Add'} Scholarship</h2>
-            <p className="text-xs text-[#8b8476]">{studentName} · Base fee ₱{baseFee.toLocaleString()}</p>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-lg transition-all">
-            <XCircle className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          <div>
-            <label className="block text-xs font-medium text-[#6b6456] mb-1">Scholarship Type</label>
-            <input
-              type="text"
-              value={scholarshipType}
-              onChange={e => setScholarshipType(e.target.value)}
-              placeholder="e.g. Academic Scholarship, Sibling Discount"
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-            />
-          </div>
-
-          <div className="flex gap-2">
-            <button
-              onClick={() => setMode('amount')}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border ${mode === 'amount' ? 'bg-[#1a2b4a] text-white border-[#1a2b4a]' : 'border-gray-200 text-[#6b6456]'}`}
-            >
-              Fixed Amount
-            </button>
-            <button
-              onClick={() => setMode('percent')}
-              className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border ${mode === 'percent' ? 'bg-[#1a2b4a] text-white border-[#1a2b4a]' : 'border-gray-200 text-[#6b6456]'}`}
-            >
-              Percent Discount
-            </button>
-          </div>
-
-          {mode === 'amount' ? (
-            <div>
-              <label className="block text-xs font-medium text-[#6b6456] mb-1">Deduction Amount (₱)</label>
-              <input
-                type="number"
-                min="0"
-                value={amount}
-                onChange={e => setAmount(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-              />
-            </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-medium text-[#6b6456] mb-1">Percent Discount (%)</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                value={percent}
-                onChange={e => setPercent(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-medium text-[#6b6456] mb-1">Notes (optional)</label>
-            <textarea
-              value={notes}
-              onChange={e => setNotes(e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-            />
-          </div>
-
-          {error && <p className="text-sm text-red-600">{error}</p>}
-
-          <div className="flex gap-3 pt-2">
-            {existing && (
-              <button
-                onClick={handleRemove}
-                disabled={removing || saving}
-                className="px-4 py-2.5 border-2 border-red-200 text-red-600 rounded-lg font-medium hover:bg-red-50 transition-all disabled:opacity-60"
-              >
-                {removing ? 'Removing…' : 'Remove'}
-              </button>
-            )}
-            <button
-              onClick={handleSave}
-              disabled={saving || removing || !schoolYearId}
-              className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-semibold hover:shadow-lg transition-all disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : 'Save Scholarship'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // Payment History
 function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { schoolYear: string; tuitionFees?: Record<string, number> }) {
   const [dateFilter, setDateFilter] = useState('today');
-  const [viewReceiptPayment, setViewReceiptPayment] = useState<any>(null);
-  const [printReceiptPayment, setPrintReceiptPayment] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [receiptPayment, setReceiptPayment] = useState<any>(null);
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -1563,7 +1696,7 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
       const [{ data: pays }, { data: charges }, { data: employees }] = await Promise.all([
         supabase
           .from('payments')
-          .select('id, student_id, amount, method, or_number, paid_at, recorded_by, students(first_name, last_name, grade_level, section)')
+          .select('id, student_id, amount, method, receipt_number, paid_at, recorded_by, students(first_name, last_name, grade_level, section)')
           .eq('school_year_id', syId)
           .order('paid_at', { ascending: true }),
         supabase.from('student_charges').select('student_id, amount').eq('school_year_id', syId),
@@ -1590,13 +1723,14 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
           date: paidDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           time: paidDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
           student: s ? `${s.first_name} ${s.last_name}` : 'Unknown Student',
+          lastName: s?.last_name || '',
           studentId: p.student_id as string,
           grade: s?.grade_level ? (s.section ? `${s.grade_level}, ${s.section}` : s.grade_level) : '—',
           amount: Number(p.amount),
           balance: Math.max(totalFee - paidBefore, 0),
           method: p.method as string,
           cashier: p.recorded_by ? (employeeNames.get(p.recorded_by) || p.recorded_by) : 'Unassigned',
-          reference: p.or_number || '-',
+          reference: p.receipt_number || '-',
         };
       }).reverse(); // newest first for display
 
@@ -1612,19 +1746,22 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
   }, new Date(0));
 
   const filteredPayments = payments.filter((p) => {
-    if (dateFilter === 'all') return true;
-    const diffDays = (latestDate.getTime() - new Date(p.date).getTime()) / (1000 * 60 * 60 * 24);
-    if (dateFilter === 'today') return diffDays < 1;
-    if (dateFilter === 'week') return diffDays < 7;
-    if (dateFilter === 'month') return diffDays < 31;
+    if (dateFilter !== 'all') {
+      const diffDays = (latestDate.getTime() - new Date(p.date).getTime()) / (1000 * 60 * 60 * 24);
+      if (dateFilter === 'today' && diffDays >= 1) return false;
+      if (dateFilter === 'week' && diffDays >= 7) return false;
+      if (dateFilter === 'month' && diffDays >= 31) return false;
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (q && !p.reference.toLowerCase().includes(q) && !p.lastName.toLowerCase().includes(q)) return false;
     return true;
   });
 
   const handleExportReport = () => {
     downloadCsv(
       `payment_history_${new Date().toISOString().slice(0, 10)}.csv`,
-      ['Receipt No.', 'Date', 'Time', 'Student', 'Student ID', 'Amount', 'Reference', 'Cashier'],
-      filteredPayments.map(p => [p.id, p.date, p.time, p.student, p.studentId, p.amount, p.reference, p.cashier])
+      ['Receipt No.', 'Date', 'Time', 'Student', 'Student ID', 'Amount', 'Cashier'],
+      filteredPayments.map(p => [p.reference, p.date, p.time, p.student, p.studentId, p.amount, p.cashier])
     );
   };
 
@@ -1644,41 +1781,28 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
         </button>
       </div>
 
-      {/* Date Filter */}
+      {/* Date Filter + Search */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <div className="flex gap-2">
-          <button
-            onClick={() => setDateFilter('today')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              dateFilter === 'today' ? 'bg-[#1a2b4a] text-white' : 'bg-[#faf8f5] text-[#6b6456] hover:bg-[#eae7e0]'
-            }`}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <select
+            value={dateFilter}
+            onChange={e => setDateFilter(e.target.value)}
+            className="px-4 py-2 rounded-lg font-medium bg-[#faf8f5] text-[#1a2b4a] border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20"
           >
-            Today
-          </button>
-          <button
-            onClick={() => setDateFilter('week')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              dateFilter === 'week' ? 'bg-[#1a2b4a] text-white' : 'bg-[#faf8f5] text-[#6b6456] hover:bg-[#eae7e0]'
-            }`}
-          >
-            This Week
-          </button>
-          <button
-            onClick={() => setDateFilter('month')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              dateFilter === 'month' ? 'bg-[#1a2b4a] text-white' : 'bg-[#faf8f5] text-[#6b6456] hover:bg-[#eae7e0]'
-            }`}
-          >
-            This Month
-          </button>
-          <button
-            onClick={() => setDateFilter('all')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              dateFilter === 'all' ? 'bg-[#1a2b4a] text-white' : 'bg-[#faf8f5] text-[#6b6456] hover:bg-[#eae7e0]'
-            }`}
-          >
-            All Time
-          </button>
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="all">All Time</option>
+          </select>
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Search by receipt number or student last name…"
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 text-[#2c2c2c] focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20"
+            />
+          </div>
         </div>
       </div>
 
@@ -1692,19 +1816,18 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
                 <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Date & Time</th>
                 <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Student</th>
                 <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Amount</th>
-                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Reference</th>
                 <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Cashier</th>
                 <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading ? (
-                <tr><td colSpan={7} className="px-6 py-8 text-center text-sm text-[#8b8476]">Loading payment history...</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-sm text-[#8b8476]">Loading payment history...</td></tr>
               ) : filteredPayments.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-8 text-center text-sm text-[#8b8476]">No payments recorded for this period.</td></tr>
+                <tr><td colSpan={6} className="px-6 py-8 text-center text-sm text-[#8b8476]">No payments recorded for this period.</td></tr>
               ) : filteredPayments.map((payment) => (
                 <tr key={payment.id} className="hover:bg-[#faf8f5] transition-colors">
-                  <td className="px-6 py-4 font-mono text-sm font-semibold text-[#1a2b4a]">{payment.id.slice(0, 8).toUpperCase()}</td>
+                  <td className="px-6 py-4 font-mono text-sm font-semibold text-[#1a2b4a]">{payment.reference}</td>
                   <td className="px-6 py-4 text-sm text-[#6b6456]">
                     <div>{payment.date}</div>
                     <div className="text-xs text-[#8b8476]">{payment.time}</div>
@@ -1716,19 +1839,11 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right font-bold text-green-600">₱{payment.amount.toLocaleString()}</td>
-                  <td className="px-6 py-4 text-sm font-mono text-[#6b6456]">{payment.reference}</td>
                   <td className="px-6 py-4 text-sm text-[#6b6456]">{payment.cashier}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center gap-2">
                       <button
-                        onClick={() => setViewReceiptPayment(payment)}
-                        className="p-2 hover:bg-blue-50 rounded-lg transition-all"
-                        title="View Receipt"
-                      >
-                        <Eye className="w-4 h-4 text-blue-600" />
-                      </button>
-                      <button
-                        onClick={() => setPrintReceiptPayment(payment)}
+                        onClick={() => setReceiptPayment(payment)}
                         className="p-2 hover:bg-[#c9a961]/10 rounded-lg transition-all"
                         title="Print Receipt"
                       >
@@ -1743,184 +1858,26 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
         </div>
       </div>
 
-      {/* View Receipt Modal */}
-      {viewReceiptPayment && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-[#1a2b4a]">Payment Receipt</h2>
-              <button
-                onClick={() => setViewReceiptPayment(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-all"
-              >
-                <XCircle className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
-                  <User className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="font-semibold text-[#1a2b4a]">{viewReceiptPayment.student}</p>
-                  <p className="text-sm text-[#8b8476] font-mono">{viewReceiptPayment.studentId}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Receipt No.</p>
-                  <p className="font-mono font-bold text-[#1a2b4a]">{viewReceiptPayment.id.slice(0, 8).toUpperCase()}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-[#6b6456] mb-1">Date & Time</p>
-                  <p className="font-semibold text-[#1a2b4a]">
-                    {new Date(`${viewReceiptPayment.date} ${viewReceiptPayment.time}`).toLocaleString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </p>
-                </div>
-              </div>
-              <div className="p-4 bg-[#faf8f5] rounded-xl">
-                <p className="text-sm text-[#6b6456] mb-2">Student Information</p>
-                <p className="font-bold text-[#1a2b4a] text-lg">{viewReceiptPayment.student}</p>
-                <p className="text-sm text-[#8b8476]">{viewReceiptPayment.grade}</p>
-                <p className="text-xs text-[#8b8476] font-mono mt-1">ID: {viewReceiptPayment.studentId}</p>
-              </div>
-              <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
-                <p className="text-sm text-green-800 mb-2">Payment Details</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-green-900 font-semibold">Amount Paid:</span>
-                  <span className="text-3xl font-bold text-green-700">₱{parseFloat(viewReceiptPayment.amount).toLocaleString()}</span>
-                </div>
-                <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
-                  <span className="text-green-800">Payment Method:</span>
-                  <span className="font-semibold text-green-900 capitalize">{viewReceiptPayment.method.replace('_', ' ')}</span>
-                </div>
-                {viewReceiptPayment.reference && (
-                  <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-green-800">Reference No.:</span>
-                    <span className="font-mono font-semibold text-green-900">{viewReceiptPayment.reference}</span>
-                  </div>
-                )}
-              </div>
-              <div className="p-4 bg-[#faf8f5] rounded-xl">
-                <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Previous Balance:</span>
-                  <span className="font-semibold text-[#1a2b4a]">₱{viewReceiptPayment.balance.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Amount Paid:</span>
-                  <span className="font-semibold text-green-600">-₱{parseFloat(viewReceiptPayment.amount).toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-gray-300">
-                  <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
-                  <span className="font-bold text-[#1a2b4a] text-lg">
-                    ₱{(viewReceiptPayment.balance - parseFloat(viewReceiptPayment.amount)).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
-                <p className="font-semibold mb-1">Dumaguete Mission School</p>
-                <p>Christian Truth, Shaping Lives...</p>
-                <p className="text-xs mt-2">Academic Year {schoolYear}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Print Receipt Modal */}
-      {printReceiptPayment && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-[#1a2b4a]">Payment Receipt</h2>
-              <button
-                onClick={() => setPrintReceiptPayment(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-all"
-              >
-                <XCircle className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
-                  <User className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="font-semibold text-[#1a2b4a]">{printReceiptPayment.student}</p>
-                  <p className="text-sm text-[#8b8476] font-mono">{printReceiptPayment.studentId}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Receipt No.</p>
-                  <p className="font-mono font-bold text-[#1a2b4a]">{printReceiptPayment.id.slice(0, 8).toUpperCase()}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-[#6b6456] mb-1">Date & Time</p>
-                  <p className="font-semibold text-[#1a2b4a]">
-                    {new Date(`${printReceiptPayment.date} ${printReceiptPayment.time}`).toLocaleString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric', 
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </p>
-                </div>
-              </div>
-              <div className="p-4 bg-[#faf8f5] rounded-xl">
-                <p className="text-sm text-[#6b6456] mb-2">Student Information</p>
-                <p className="font-bold text-[#1a2b4a] text-lg">{printReceiptPayment.student}</p>
-                <p className="text-sm text-[#8b8476]">{printReceiptPayment.grade}</p>
-                <p className="text-xs text-[#8b8476] font-mono mt-1">ID: {printReceiptPayment.studentId}</p>
-              </div>
-              <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
-                <p className="text-sm text-green-800 mb-2">Payment Details</p>
-                <div className="flex justify-between items-center">
-                  <span className="text-green-900 font-semibold">Amount Paid:</span>
-                  <span className="text-3xl font-bold text-green-700">₱{parseFloat(printReceiptPayment.amount).toLocaleString()}</span>
-                </div>
-                <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
-                  <span className="text-green-800">Payment Method:</span>
-                  <span className="font-semibold text-green-900 capitalize">{printReceiptPayment.method.replace('_', ' ')}</span>
-                </div>
-                {printReceiptPayment.reference && (
-                  <div className="mt-2 flex justify-between text-sm">
-                    <span className="text-green-800">Reference No.:</span>
-                    <span className="font-mono font-semibold text-green-900">{printReceiptPayment.reference}</span>
-                  </div>
-                )}
-              </div>
-              <div className="p-4 bg-[#faf8f5] rounded-xl">
-                <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Previous Balance:</span>
-                  <span className="font-semibold text-[#1a2b4a]">₱{printReceiptPayment.balance.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between mb-2">
-                  <span className="text-[#6b6456]">Amount Paid:</span>
-                  <span className="font-semibold text-green-600">-₱{parseFloat(printReceiptPayment.amount).toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-gray-300">
-                  <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
-                  <span className="font-bold text-[#1a2b4a] text-lg">
-                    ₱{(printReceiptPayment.balance - parseFloat(printReceiptPayment.amount)).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-              <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
-                <p className="font-semibold mb-1">Dumaguete Mission School</p>
-                <p>Christian Truth, Shaping Lives...</p>
-                <p className="text-xs mt-2">Academic Year {schoolYear}</p>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Receipt Modal (Print action) */}
+      {receiptPayment && (
+        <ReceiptModal
+          studentName={receiptPayment.student}
+          studentId={receiptPayment.studentId}
+          grade={receiptPayment.grade}
+          reference={receiptPayment.reference}
+          amount={parseFloat(receiptPayment.amount)}
+          method={receiptPayment.method}
+          dateLabel={new Date(`${receiptPayment.date} ${receiptPayment.time}`).toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })}
+          balanceBefore={receiptPayment.balance}
+          schoolYear={schoolYear}
+          onClose={() => setReceiptPayment(null)}
+        />
       )}
     </div>
   );

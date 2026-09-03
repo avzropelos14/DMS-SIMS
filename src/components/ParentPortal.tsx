@@ -2,13 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
+import { fetchAssignedTeacherMap } from '../lib/schedule';
+import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES, getTuitionForGrade, useTuitionBreakdown } from '../lib/tuition';
 import schoolLogo from './assets/dmgteLogo.jpg';
 import { QRCodeCanvas } from 'qrcode.react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   LayoutDashboard, Award, Calendar, Settings, Users,
   BookOpen, Download,
   QrCode, UserPlus, X, Plus, Timer, Shield, CheckCircle, AlertCircle,
-  Mail, User, Trash2, Phone, MapPin, IdCard, FileText, ArrowLeft, LogOut
+  Mail, User, Trash2, Phone, Briefcase, FileText, ArrowLeft, LogOut
 } from 'lucide-react';
 
 // The Guard portal's scanner decodes and parses this exact shape (see GuardPortal.tsx).
@@ -32,13 +36,19 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
     getCurrentSchoolYear().then((sy) => { if (sy) setSchoolYear(sy.label); });
   }, []);
 
-  // First-time parents must acknowledge the Notice of Access before the portal is usable.
-  // Persisted per-user so it only ever appears once (until localStorage is cleared).
-  const noticeStorageKey = `noticeOfAccessAck_${user?.id || user?.email || 'guest'}`;
+  // First-time parents — or parents whose child has just been re-enrolled for a new
+  // school year — must acknowledge the Notice of Access before the portal is usable.
+  // Persisted per-user *and* per-school-year, so re-enrollment into a new year surfaces
+  // the notice again instead of a once-ever flag silently covering every future year.
+  const noticeStorageKey = `noticeOfAccessAck_${user?.id || user?.email || 'guest'}_${schoolYear}`;
   const [showNotice, setShowNotice] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(noticeStorageKey) !== 'true';
   });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setShowNotice(window.localStorage.getItem(noticeStorageKey) !== 'true');
+  }, [noticeStorageKey]);
   const acknowledgeNotice = () => {
     window.localStorage.setItem(noticeStorageKey, 'true');
     setShowNotice(false);
@@ -62,7 +72,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
       setChildrenLoading(true);
       const { data, error } = await supabase
         .from('student_guardians')
-        .select('student_id, relationship, is_primary_contact, can_view_academics, can_pickup, students(id, first_name, middle_name, last_name, grade_level, section, date_of_birth, gender, status, gpa)')
+        .select('student_id, relationship, is_primary_contact, can_view_academics, can_pickup, students(id, first_name, middle_name, last_name, grade_level, section, date_of_birth, gender, status, gpa, mother_info, father_info, guardian_info, enrolled_date)')
         .eq('guardian_id', user.id);
 
       if (cancelled) return;
@@ -73,12 +83,20 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
           .map((row: any) => {
             const s = row.students;
             const fullName = [s.first_name, s.middle_name, s.last_name].filter(Boolean).join(' ');
+            // Occupation lives on whichever *_info JSONB bucket matches this guardian's
+            // relationship to the child, as recorded at enrollment.
+            const infoForRelationship = row.relationship === 'Mother'
+              ? s.mother_info
+              : row.relationship === 'Father'
+                ? s.father_info
+                : s.guardian_info;
             return {
               id: s.id,
               name: fullName,
               grade: s.section ? `${s.grade_level}, Section ${s.section}` : s.grade_level,
               gradeLevel: s.grade_level,
               section: s.section,
+              enrolledDate: s.enrolled_date,
               gender: s.gender,
               dateOfBirth: s.date_of_birth,
               status: s.status,
@@ -87,6 +105,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
               isPrimaryContact: row.is_primary_contact,
               canViewAcademics: row.can_view_academics,
               canPickup: row.can_pickup,
+              guardianOccupation: infoForRelationship?.occupation || '',
             };
           });
         setChildren(mapped);
@@ -100,6 +119,30 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
     loadChildren();
     return () => { cancelled = true; };
   }, [user?.id]);
+
+  // Restricts the header year-switcher to years at least one of this guardian's children
+  // was actually enrolled in — a new student has no prior years to offer, while a
+  // continuing student sees every year back to whichever one they first enrolled in.
+  const [availableYears, setAvailableYears] = useState<string[] | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAvailableYears() {
+      if (children.length === 0) { setAvailableYears(undefined); return; }
+      const { data } = await supabase
+        .from('enrollments')
+        .select('school_years(label)')
+        .in('student_id', children.map((c: any) => c.id));
+      if (cancelled) return;
+      const labels = Array.from(new Set((data ?? []).map((r: any) => r.school_years?.label).filter(Boolean)));
+      // Always include the current label so a brand-new student (no enrollment row yet)
+      // still has somewhere to land — and so the selector never ends up empty.
+      if (schoolYear && !labels.includes(schoolYear)) labels.push(schoolYear);
+      setAvailableYears(labels);
+    }
+    loadAvailableYears();
+    return () => { cancelled = true; };
+  }, [children, schoolYear]);
 
   if (user?.enrollmentConfirmed === false) {
     return (
@@ -124,7 +167,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
   const navigation = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'academics', label: 'Academic Progress', icon: Award },
-    { id: 'schedule', label: 'Schedule', icon: Calendar },
+    { id: 'schedule', label: 'Student Schedule', icon: Calendar },
     { id: 'pickup', label: 'Student Pickup', icon: QrCode },
     { id: 'financials', label: 'Billing & Payments', icon: Settings },
     { id: 'profile', label: 'My Profile', icon: User },
@@ -144,6 +187,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
           schoolYear={schoolYear}
           onSchoolYearChange={setSchoolYear}
           onProfileClick={() => setActiveView('profile')}
+          availableYears={availableYears}
         >
           {activeView === 'schoolPolicy' && <SchoolPolicyPage onBack={() => setActiveView('overview')} />}
           {activeView !== 'schoolPolicy' && childrenLoading && (
@@ -248,7 +292,7 @@ function NoticeOfAccessModal({ onAcknowledge }: { onAcknowledge: () => void }) {
   return (
     <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-        <div className="px-6 py-5 border-b border-gray-200 flex items-center gap-3 shrink-0">
+        <div className="px-6 py-5 border-b border-gray-200 flex items-center gap-3 shrink-0 ">
           <div className="w-10 h-10 bg-[#1a2b4a] rounded-lg flex items-center justify-center shrink-0">
             <FileText className="w-5 h-5 text-white" />
           </div>
@@ -277,6 +321,16 @@ function NoticeOfAccessModal({ onAcknowledge }: { onAcknowledge: () => void }) {
             This Notice of Access confirms that you, as the parent or legal guardian, are being granted access to the Dumaguete Mission School Parent Portal.
             By using this portal, you agree to the terms set forth in your enrollment contract with the school, including but not limited to the sections below.
           </p>
+
+          <div className='mt-4'>
+            <h3 className="font-semibold text-[#1a2b4a] mb-1">Enrollment Agreement Acknowledgement</h3>
+            <p className="text-[#6b6456]">By signing below, the Parent/Guardian achknowledges that they have read, understood, and agreed to all the terms and conditions stated in the Dumaguete Mission School</p>
+          </div>
+
+          <div className='mt-4'>
+            <h3 className="font-semibold text-[#1a2b4a] mb-1">Enrollment Agreement</h3>
+            <p className="text-[#6b6456]">The Parent/Guardian also affirms that they have the legal authority to enter into this agreement on behalf of the student. Furthermore, they understand that this enrollment is legally biinding and all obligations must be fulfilled as per the agreement</p>
+          </div>
 
           <div>
             <h3 className="font-semibold text-[#1a2b4a] mb-1">1. Data Privacy</h3>
@@ -364,8 +418,10 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
   const childData = { gpa: childGPA };
 
   // Outstanding balance across all of this guardian's children, for the selected
-  // school year: sum(student_charges) [falling back to the grade's tuition_fees
-  // annual fee when no itemized charges exist yet] minus sum(payments).
+  // school year: per child, sum(student_charges) [falling back to the grade's
+  // tuition_fees annual fee when no itemized charges exist yet], summed across
+  // children, minus sum(payments). Mirrors the balance calculation in
+  // CashierPortal's fetchStudentBalances.
   const [outstandingBalance, setOutstandingBalance] = useState<number | null>(null);
 
   useEffect(() => {
@@ -399,15 +455,21 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
       ]);
       if (cancelled) return;
 
-      const chargedChildIds = new Set((charges || []).map((c: any) => c.student_id));
-      let totalDue = (charges || []).reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+      const chargesByChild = new Map<string, number>();
+      (charges || []).forEach((c: any) => {
+        chargesByChild.set(c.student_id, (chargesByChild.get(c.student_id) ?? 0) + Number(c.amount || 0));
+      });
 
-      // Children with no itemized charges yet fall back to their grade's annual tuition fee.
+      const tuitionFeesMap = { ...DEFAULT_TUITION_FEES, ...Object.fromEntries((tuitionFees ?? []).map((f: any) => [f.grade_level, Number(f.annual_fee)])) };
+
+      let totalDue = 0;
       children.forEach((child: any) => {
-        if (!chargedChildIds.has(child.id) && tuitionFees) {
-          const feeRow = (tuitionFees as any[]).find((f) => f.grade_level === child.gradeLevel);
-          if (feeRow) totalDue += Number(feeRow.annual_fee || 0);
-        }
+        const chargeTotal = chargesByChild.get(child.id);
+        const baseFee = chargeTotal && chargeTotal > 0
+          ? chargeTotal
+          : getTuitionForGrade(tuitionFeesMap, child.gradeLevel);
+
+        totalDue += baseFee;
       });
 
       const totalPaid = (payments || []).reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
@@ -417,17 +479,11 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
     return () => { cancelled = true; };
   }, [children, schoolYear]);
 
-  const stats = [
-    {
-      label: 'Outstanding Balance',
-      value: `₱${(outstandingBalance ?? 0).toLocaleString()}`,
-      icon: Settings,
-      color: 'from-[#2d4263] to-[#3e5776]'
-    }
-  ];
+  
 
-  // Per-child tuition line-item breakdown, from real student_charges (falling
-  // back to the grade's tuition_fees annual fee when no itemized charges exist).
+  // Per-child tuition line-item breakdown across ALL children (not just the selected
+  // one), same computation as the Billing & Payments' "Tuition Details" grid —
+  // real student_charges (falling back to the grade's tuition_fees annual fee).
   const [tuitionItemsByChild, setTuitionItemsByChild] = useState<Record<string, { label: string; amount: number; status: string }[]>>({});
 
   useEffect(() => {
@@ -438,24 +494,37 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
       const { data: yearRow } = await supabase.from('school_years').select('id').eq('label', schoolYear).maybeSingle();
       const schoolYearId = yearRow?.id;
 
-      const [{ data: charges }, { data: payments }, { data: tuitionFees }] = await Promise.all([
+      const [{ data: charges }, { data: payments }, { data: tuitionFees }, { data: enrollmentFees }] = await Promise.all([
         supabase.from('student_charges').select('student_id, description, amount').in('student_id', childIds).eq('school_year_id', schoolYearId ?? ''),
-        supabase.from('payments').select('student_id, amount').in('student_id', childIds).eq('school_year_id', schoolYearId ?? ''),
+        supabase.from('payments').select('student_id, amount, description').in('student_id', childIds).eq('school_year_id', schoolYearId ?? ''),
         schoolYearId
           ? supabase.from('tuition_fees').select('grade_level, annual_fee').eq('school_year_id', schoolYearId)
+          : Promise.resolve({ data: null } as any),
+        schoolYearId
+          ? supabase.from('enrollment_fees').select('grade_level, fee').eq('school_year_id', schoolYearId)
           : Promise.resolve({ data: null } as any),
       ]);
       if (cancelled) return;
 
+      // Payments are tagged by description ('Enrollment Fee' vs 'Tuition Payment' — see
+      // CashierPortal's ProcessPayment), so each pays down its own line item rather than
+      // being pooled together.
       const paidByChild = new Map<string, number>();
-      (payments || []).forEach((p: any) => paidByChild.set(p.student_id, (paidByChild.get(p.student_id) ?? 0) + Number(p.amount || 0)));
+      const paidEnrollmentByChild = new Map<string, number>();
+      (payments || []).forEach((p: any) => {
+        const bucket = p.description === 'Enrollment Fee' ? paidEnrollmentByChild : paidByChild;
+        bucket.set(p.student_id, (bucket.get(p.student_id) ?? 0) + Number(p.amount || 0));
+      });
+
+      const tuitionFeesMap = { ...DEFAULT_TUITION_FEES, ...Object.fromEntries((tuitionFees ?? []).map((f: any) => [f.grade_level, Number(f.annual_fee)])) };
+      const enrollmentFeesMap = { ...DEFAULT_ENROLLMENT_FEES, ...Object.fromEntries((enrollmentFees ?? []).map((f: any) => [f.grade_level, Number(f.fee)])) };
 
       const result: Record<string, { label: string; amount: number; status: string }[]> = {};
       children.forEach((child: any) => {
         const childCharges = (charges || []).filter((c: any) => c.student_id === child.id);
         const paid = paidByChild.get(child.id) ?? 0;
         let remaining = paid;
-        const items = childCharges.length > 0
+        const tuitionItems = childCharges.length > 0
           ? childCharges.map((c: any) => {
               const amount = Number(c.amount || 0);
               const status = remaining >= amount ? 'Paid' : remaining > 0 ? 'Partial' : 'Unpaid';
@@ -463,10 +532,18 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
               return { label: c.description, amount, status };
             })
           : (() => {
-              const feeRow = (tuitionFees as any[] | null)?.find((f) => f.grade_level === child.gradeLevel);
-              const amount = Number(feeRow?.annual_fee || 0);
-              return amount > 0 ? [{ label: 'Tuition Fee', amount, status: paid >= amount ? 'Paid' : paid > 0 ? 'Partial' : 'Unpaid' }] : [];
+              const amount = getTuitionForGrade(tuitionFeesMap, child.gradeLevel);
+              return amount > 0 ? [{ label: 'Base Tuition Fee', amount, status: paid >= amount ? 'Paid' : paid > 0 ? 'Partial' : 'Unpaid' }] : [];
             })();
+
+        const enrollmentFeeAmount = getTuitionForGrade(enrollmentFeesMap, child.gradeLevel);
+        const paidEnrollment = paidEnrollmentByChild.get(child.id) ?? 0;
+        const enrollmentItems = enrollmentFeeAmount > 0
+          ? [{ label: 'Enrollment Fee', amount: enrollmentFeeAmount, status: paidEnrollment >= enrollmentFeeAmount ? 'Paid' : paidEnrollment > 0 ? 'Partial' : 'Unpaid' }]
+          : [];
+
+        const items = [...enrollmentItems, ...tuitionItems];
+
         result[child.id] = items;
       });
       setTuitionItemsByChild(result);
@@ -477,6 +554,12 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
 
   const getTuitionItems = (childId: string) => tuitionItemsByChild[childId] ?? [];
 
+  // Total/Balance shown on the dashboard card use the same monthly-installment
+  // breakdown as the Billing & Payments detail table, so the two never disagree.
+  const tuitionBreakdownByChild = useTuitionBreakdown(children, schoolYear);
+  const getTuitionTotal = (childId: string) => tuitionBreakdownByChild[childId]?.total ?? 0;
+  const getTuitionBalance = (childId: string) => tuitionBreakdownByChild[childId]?.balance ?? 0;
+
   // Note: the "Recent Activity" panel that used to read from a hardcoded
   // recentActivity mock array is commented out further below (no live
   // per-event activity feed table exists yet to back it), so the mock
@@ -485,82 +568,31 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
   return (
     <div className="space-y-6">
       {/* Welcome Banner with Child Info */}
-      <div className="bg-[#1a5c38] rounded-xl p-8 text-white">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-3xl font-bold mb-2">Welcome, {user.name.split(' ')[0]}!</h1>
+      <div className="bg-[#1a5c38] rounded-xl p-6 sm:p-8 text-white">
+        <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2 break-words">Welcome, {user.firstName || user.name.split(' ')[0]}!</h1>
             <p className="text-white/90 mb-4">Monitor your child's academic journey</p>
-            <div className="flex items-center gap-6 text-sm">
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4" />
-                <span>{childInfo.name}</span>
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+              <div className="flex items-center gap-2 min-w-0">
+                <Users className="w-4 h-4 shrink-0" />
+                <span className="truncate">{childInfo.name}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <BookOpen className="w-4 h-4" />
-                <span>{childInfo.grade}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <BookOpen className="w-4 h-4 shrink-0" />
+                <span className="truncate">{childInfo.grade}</span>
               </div>
             </div>
           </div>
-          <div className="w-20 h-20 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl font-bold">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-2xl sm:text-3xl font-bold shrink-0 self-center sm:self-auto">
             {childInfo.name.split(' ').map((n: string) => n[0]).join('')}
           </div>
         </div>
       </div>
 
-      {/* Child Selection Filter */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <label className="block text-sm font-semibold text-[#1a2b4a] mb-3">
-          Select Child
-        </label>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {children.map((child: any) => (
-            <button
-              key={child.id}
-              onClick={() => setSelectedChild(child.id)}
-              className={`p-4 rounded-xl border-2 transition-all text-left ${
-                selectedChild === child.id
-                  ? 'border-[#c9a961] bg-[#c9a961]/5 shadow-md'
-                  : 'border-gray-200 hover:border-[#c9a961]/50 hover:bg-[#faf8f5]'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
-                  selectedChild === child.id 
-                    ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
-                    : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
-                }`}>
-                  {child.name.split(' ').map((n: string) => n[0]).join('')}
-                </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
-                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
-                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
-                </div>
-                {selectedChild === child.id && (
-                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
-                )}
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {stats.map((stat, index) => {
-          const Icon = stat.icon;
-          return (
-            <div key={index} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-lg transition-all">
-              <div className="flex items-start justify-between mb-4">
-                <div className={`w-12 h-12 bg-gradient-to-br ${stat.color} rounded-lg flex items-center justify-center`}>
-                  <Icon className="w-6 h-6 text-white" />
-                </div>
-              </div>
-              <h3 className="text-2xl font-bold text-[#2c2c2c] mb-1">{stat.value}</h3>
-              <p className="text-sm text-[#8b8476]">{stat.label}</p>
-            </div>
-          );
-        })}
 
         {/* School Policy — links out to the placeholder policy document page */}
         <button
@@ -624,13 +656,13 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
         </div> */}
       </div>
 
-      {/* Tuition Payment Breakdown - per child */}
+      {/* Tuition Details - per child */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-6">Tuition Payment Breakdown</h3>
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-6">Tuition Details</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {children.map((child: any) => {
             const items = getTuitionItems(child.id);
-            const total = items.reduce((sum: number, item: any) => sum + item.amount, 0);
+            const total = getTuitionTotal(child.id);
             return (
               <div key={child.id} className="border border-gray-200 rounded-xl overflow-hidden">
                 <div className="bg-[#faf8f5] px-4 py-3 border-b border-gray-200 flex items-center gap-3">
@@ -644,15 +676,24 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
                 </div>
                 <div className="divide-y divide-gray-100">
                   {items.map((item: any, idx: number) => (
-                    <div key={idx} className="px-4 py-2.5 flex items-center justify-between">
-                      <span className="text-xs text-[#6b6456]">{item.label}</span>
-                      <span className="text-xs font-semibold text-[#2c2c2c]">₱{item.amount.toLocaleString()}</span>
+                    <div key={idx} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                      <p className="text-xs text-[#6b6456] truncate min-w-0">{item.label}</p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className={`text-xs font-semibold whitespace-nowrap ${item.amount < 0 ? 'text-green-600' : 'text-[#2c2c2c]'}`}>
+                          {item.amount < 0 ? `-₱${Math.abs(item.amount).toLocaleString()}` : `₱${item.amount.toLocaleString()}`}
+                        </span>
+                      </div>
                     </div>
+                    
                   ))}
                 </div>
                 <div className="px-4 py-3 bg-[#faf8f5] border-t border-gray-200 flex items-center justify-between">
                   <span className="text-sm font-semibold text-[#1a2b4a]">Total</span>
                   <span className="text-sm font-bold text-[#c9a961]">₱{total.toLocaleString()}</span>
+                </div>
+                <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-[#1a2b4a]">Balance</span>
+                  <span className="text-sm font-bold text-[#7d1935]">₱{getTuitionBalance(child.id).toLocaleString()}</span>
                 </div>
               </div>
             );
@@ -729,41 +770,49 @@ function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChil
   const gradeData = { currentGPA, detailedGrades };
 
   const handleDownloadReport = () => {
-    const lines: string[] = [];
-    lines.push(`Academic Progress Report`);
-    lines.push(`School Year,${schoolYear}`);
-    lines.push(`Student,${childInfo.name}`);
-    lines.push(`Grade Level,${childInfo.grade}`);
-    lines.push(`Student ID,${childInfo.id}`);
-    lines.push(`Current GPA,${gradeData.currentGPA}`);
-    lines.push('');
-    lines.push('Subject,Teacher,Q1,Q2,Q3,Q4,Final');
-    gradeData.detailedGrades.forEach((g: any) => {
-      lines.push(`${g.subject},${g.teacher},${g.q1 ?? ''},${g.q2 ?? ''},${g.q3 ?? ''},${g.q4 ?? ''},${g.final ?? ''}`);
+    const doc = new jsPDF();
+
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DUMAGUETE MISSION SCHOOL', 105, 18, { align: 'center' });
+
+    doc.setFontSize(13);
+    doc.text('ACADEMIC PROGRESS REPORT', 105, 27, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Student: ${childInfo.name}`, 14, 40);
+    doc.text(`Student ID: ${childInfo.id}`, 14, 47);
+    doc.text(`${schoolYear} - ${childInfo.grade}`, 14, 54);
+    doc.text(`Current GPA: ${gradeData.currentGPA}`, 14, 61);
+
+    autoTable(doc, {
+      startY: 69,
+      head: [['Subject', 'Teacher', 'Q1', 'Q2', 'Q3', 'Q4', 'Final']],
+      body: gradeData.detailedGrades.map((g: any) => [
+        g.subject,
+        g.teacher,
+        g.q1 ?? '—',
+        g.q2 ?? '—',
+        g.q3 ?? '—',
+        g.q4 ?? '—',
+        g.final ?? '—',
+      ]),
     });
 
-    const csvContent = lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${childInfo.name.replace(/\s+/g, '_')}_Academic_Report_${schoolYear}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    doc.save(`${childInfo.name.replace(/\s+/g, '_')}_Academic_Report_${schoolYear}.pdf`);
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Academic Progress</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#1a2b4a] mb-2">Academic Progress</h1>
           <p className="text-[#6b6456]">Monitor your child's academic performance</p>
         </div>
         <button
           onClick={handleDownloadReport}
-          className="flex items-center gap-2 px-6 py-3 bg-[#1a5c38] text-white rounded-lg hover:shadow-lg transition-all"
+          className="flex items-center justify-center gap-2 px-6 py-3 bg-[#1a5c38] text-white rounded-lg hover:shadow-lg transition-all w-full sm:w-auto"
         >
           <Download className="w-5 h-5" />
           <span className="font-medium">Download Report</span>
@@ -787,20 +836,20 @@ function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChil
               }`}
             >
               <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
-                  selectedChild === child.id 
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 ${
+                  selectedChild === child.id
                     ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
                     : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
                 }`}>
                   {child.name.split(' ').map((n: string) => n[0]).join('')}
                 </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
-                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
-                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#1a2b4a] truncate">{child.name}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5 truncate">{child.id}</p>
                 </div>
                 {selectedChild === child.id && (
-                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                  <CheckCircle className="w-5 h-5 text-[#c9a961] flex-shrink-0" />
                 )}
               </div>
             </button>
@@ -815,16 +864,16 @@ function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChil
           <p className="text-sm text-[#6b6456] mt-1">Student: {childInfo.name} ({childInfo.grade})</p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[640px]">
             <thead className="bg-[#faf8f5] border-b border-gray-200">
               <tr>
-                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Subject</th>
-                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Teacher</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q1</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q2</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q3</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q4</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Final</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Subject</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Teacher</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q1</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q2</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q3</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q4</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Final</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -849,6 +898,16 @@ function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChil
                   </td>
                 </tr>
               ))}
+              {!loadingGrades && gradeData.detailedGrades.length > 0 && (
+                <tr className="bg-[#faf8f5] font-semibold">
+                  <td className="px-6 py-4 text-[#1a2b4a]" colSpan={6}>Final GPA</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#1a2b4a]/10 text-[#1a2b4a]">
+                      {gradeData.currentGPA}
+                    </span>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -862,9 +921,25 @@ const WEEK_DAY_ABBR: Record<string, string> = {
   Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed', Thursday: 'Thu', Friday: 'Fri'
 };
 
+// Converts a "HH:MM-HH:MM" 24-hour time_label into a 12-hour "h:mm AM - h:mm AM" range.
+function formatTimeRange12(timeLabel: string): string {
+  if (!timeLabel) return '';
+  const to12 = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return t;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
+  };
+  const [start, end] = timeLabel.split('-');
+  if (!end) return to12(start);
+  return `${to12(start)} - ${to12(end)}`;
+}
+
 function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
   const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
   const [scheduleRows, setScheduleRows] = useState<any[]>([]);
+  const [teacherMap, setTeacherMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -887,6 +962,10 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
       if (cancelled) return;
       if (error) console.error('Failed to load schedule', error);
       setScheduleRows(data ?? []);
+
+      const map = await fetchAssignedTeacherMap(childInfo.gradeLevel, childInfo.section ?? null);
+      if (cancelled) return;
+      setTeacherMap(map);
       setLoading(false);
     })();
 
@@ -898,13 +977,14 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
     const abbr = WEEK_DAY_ABBR[day];
     schedule[day] = scheduleRows
       .filter((row) => Array.isArray(row.days) && row.days.includes(abbr))
-      .map((row) => ({ time: row.time_label, subject: row.subject, teacher: row.teacher, room: row.room }));
+      .map((row) => ({ time: row.time_label, subject: row.subject, teacher: teacherMap[row.subject] || row.teacher, room: row.room }))
+      .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   }
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Class Schedule</h1>
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student Schedule</h1>
         <p className="text-[#6b6456]">View your child's weekly class schedule</p>
       </div>
 
@@ -925,20 +1005,20 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
               }`}
             >
               <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
-                  selectedChild === child.id 
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 ${
+                  selectedChild === child.id
                     ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
                     : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
                 }`}>
                   {child.name.split(' ').map((n: string) => n[0]).join('')}
                 </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
-                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
-                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#1a2b4a] truncate">{child.name}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5 truncate">{child.id}</p>
                 </div>
                 {selectedChild === child.id && (
-                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                  <CheckCircle className="w-5 h-5 text-[#c9a961] flex-shrink-0" />
                 )}
               </div>
             </button>
@@ -949,9 +1029,10 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
       {/* Schedule Display */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {loading && <p className="p-6 text-sm text-[#8b8476]">Loading schedule…</p>}
-        <div className="grid grid-cols-5 gap-px bg-gray-200">
+        <div className="overflow-x-auto">
+        <div className="grid grid-flow-col auto-cols-[minmax(200px,1fr)] lg:grid-flow-row lg:grid-cols-5 lg:auto-cols-auto gap-px bg-gray-200">
           {!loading && Object.entries(schedule).map(([day, classes]) => (
-            <div key={day} className="bg-white">
+            <div key={day} className="bg-white min-w-0">
               <div className="bg-[#1a5c38] p-4 text-center">
                 <h3 className="font-semibold text-white">{day}</h3>
               </div>
@@ -959,15 +1040,16 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
                 {classes.length === 0 && <p className="text-xs text-[#8b8476]">No classes.</p>}
                 {classes.map((item: any, index: number) => (
                   <div key={index} className="p-3 bg-[#faf8f5] rounded-lg border border-gray-200">
-                    <p className="text-xs font-semibold text-[#7d1935] mb-2">{item.time}</p>
-                    <p className="text-sm font-medium text-[#1a2b4a] mb-1">{item.subject}</p>
-                    <p className="text-xs text-[#8b8476] mb-1">{item.teacher}</p>
-                    <p className="text-xs text-[#6b6456]">{item.room}</p>
+                    <p className="text-xs font-semibold text-[#7d1935] mb-2 break-words">{formatTimeRange12(item.time)}</p>
+                    <p className="text-sm font-medium text-[#1a2b4a] mb-1 break-words">{item.subject}</p>
+                    <p className="text-xs text-[#8b8476] mb-1 break-words">{item.teacher}</p>
+                    <p className="text-xs text-[#6b6456] break-words">{item.room}</p>
                   </div>
                 ))}
               </div>
             </div>
           ))}
+        </div>
         </div>
       </div>
     </div>
@@ -1109,20 +1191,20 @@ function StudentPickup({ user, children }: any) {
               }`}
             >
               <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
-                  selectedChild === child.id 
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 ${
+                  selectedChild === child.id
                     ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
                     : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
                 }`}>
                   {child.name.split(' ').map((n: string) => n[0]).join('')}
                 </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
-                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
-                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#1a2b4a] truncate">{child.name}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5 truncate">{child.id}</p>
                 </div>
                 {selectedChild === child.id && (
-                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                  <CheckCircle className="w-5 h-5 text-[#c9a961] flex-shrink-0" />
                 )}
               </div>
             </button>
@@ -1133,13 +1215,13 @@ function StudentPickup({ user, children }: any) {
       {/* Child Information */}
       <div className="bg-gradient-to-r from-[#c9a961] via-[#d4af37] to-[#b8994f] rounded-xl p-6 text-white">
         <div className="flex items-center gap-4 mb-4">
-          <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-2xl font-bold">
+          <div className="w-16 h-16 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-2xl font-bold shrink-0">
             {childInfo.name.split(' ').map((n: string) => n[0]).join('')}
           </div>
-          <div>
-            <h2 className="text-2xl font-bold">{childInfo.name}</h2>
-            <p className="text-white/90">{childInfo.grade}</p>
-            <p className="text-sm text-white/80">ID: {childInfo.id}</p>
+          <div className="min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold truncate">{childInfo.name}</h2>
+            <p className="text-white/90 truncate">{childInfo.grade}</p>
+            <p className="text-sm text-white/80 truncate">ID: {childInfo.id}</p>
           </div>
         </div>
       </div>
@@ -1221,14 +1303,14 @@ function StudentPickup({ user, children }: any) {
         {/* Temporary QR Code Generation */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="bg-gradient-to-r from-[#7d1935] to-[#9b2847] p-6 text-white">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <Timer className="w-6 h-6" />
-                <h3 className="text-xl font-bold">Temporary Access</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+              <div className="flex items-center gap-3 min-w-0">
+                <Timer className="w-6 h-6 shrink-0" />
+                <h3 className="text-xl font-bold truncate">Temporary Access</h3>
               </div>
-              <button 
+              <button
                 onClick={() => setShowTempForm(!showTempForm)}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-lg rounded-lg hover:bg-white/30 transition-all"
+                className="flex items-center gap-2 px-4 py-2 min-h-11 bg-white/20 backdrop-blur-lg rounded-lg hover:bg-white/30 transition-all shrink-0"
               >
                 {showTempForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                 <span className="text-sm font-medium">{showTempForm ? 'Cancel' : 'New'}</span>
@@ -1249,7 +1331,7 @@ function StudentPickup({ user, children }: any) {
                     value={guardianName}
                     onChange={(e) => setGuardianName(e.target.value)}
                     placeholder="Enter full name"
-                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
                   />
                 </div>
 
@@ -1260,7 +1342,7 @@ function StudentPickup({ user, children }: any) {
                   <select
                     value={relationship}
                     onChange={(e) => setRelationship(e.target.value)}
-                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
                   >
                     <option value="">Select relationship</option>
                     <option value="Aunt">Aunt</option>
@@ -1268,7 +1350,6 @@ function StudentPickup({ user, children }: any) {
                     <option value="Grandmother">Grandmother</option>
                     <option value="Grandfather">Grandfather</option>
                     <option value="Family Friend">Family Friend</option>
-                    <option value="Other">Other</option>
                   </select>
                 </div>
 
@@ -1281,7 +1362,7 @@ function StudentPickup({ user, children }: any) {
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="0917-XXX-XXXX"
-                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
                   />
                 </div>
 
@@ -1292,7 +1373,7 @@ function StudentPickup({ user, children }: any) {
                   <select
                     value={validHours}
                     onChange={(e) => setValidHours(e.target.value)}
-                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all"
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
                   >
                     <option value="1">1 hour</option>
                     <option value="2">2 hours</option>
@@ -1398,24 +1479,24 @@ function StudentPickup({ user, children }: any) {
                       </div>
 
                       {!expired && !revoked ? (
-                        <div className="mt-3 pt-3 border-t border-gray-200 flex gap-2">
+                        <div className="mt-3 pt-3 border-t border-gray-200 flex flex-wrap gap-2">
                           <button
                             onClick={() => setViewingQr(guardian)}
-                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all text-xs font-medium"
+                            className="flex-1 min-w-22.5 flex items-center justify-center gap-1 px-3 py-2 min-h-10 bg-white border border-gray-200 rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] transition-all text-xs font-medium"
                           >
                             <QrCode className="w-3 h-3" />
                             View QR
                           </button>
-                          <button 
+                          <button
                             onClick={() => handleRevoke(guardian.id)}
-                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 transition-all text-xs font-medium"
+                            className="flex-1 min-w-22.5 flex items-center justify-center gap-1 px-3 py-2 min-h-10 bg-red-50 border border-red-200 text-red-700 rounded-lg hover:bg-red-100 transition-all text-xs font-medium"
                           >
                             <X className="w-3 h-3" />
                             Revoke
                           </button>
                           <button
                             onClick={() => handleDelete(guardian.id)}
-                            className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-gray-50 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-100 hover:border-gray-300 transition-all text-xs font-medium"
+                            className="flex-1 min-w-22.5 flex items-center justify-center gap-1 px-3 py-2 min-h-10 bg-gray-50 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-100 hover:border-gray-300 transition-all text-xs font-medium"
                           >
                             <Trash2 className="w-3 h-3" />
                             Delete
@@ -1478,10 +1559,10 @@ function StudentPickup({ user, children }: any) {
       {/* Temporary QR view/download modal */}
       {viewingQr && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setViewingQr(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-bold text-[#1a2b4a]">Temporary Pickup QR</h3>
-              <button onClick={() => setViewingQr(null)} className="p-1 hover:bg-gray-100 rounded-lg">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-bold text-[#1a2b4a] truncate">Temporary Pickup QR</h3>
+              <button onClick={() => setViewingQr(null)} className="p-2 min-w-11 min-h-11 flex items-center justify-center hover:bg-gray-100 rounded-lg shrink-0">
                 <X className="w-5 h-5 text-[#6b6456]" />
               </button>
             </div>
@@ -1527,6 +1608,12 @@ function StudentPickup({ user, children }: any) {
 function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild }: any) {
   const childInfo = children.find((c: any) => c.id === selectedChild) || children[0];
 
+  // Per-child tuition breakdown, split into one installment per month of the school
+  // year, plus the Enrollment Fee as its own line. Shared with the dashboard's
+  // Tuition Details summary so both show the same total/balance.
+  const breakdownByChild = useTuitionBreakdown(children, schoolYear);
+  const getBreakdown = (childId: string) => breakdownByChild[childId] ?? { items: [], total: 0, balance: 0 };
+
   const [billingInfo, setBillingInfo] = useState({ total: 0, paid: 0, balance: 0 });
   const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
   const [loadingBilling, setLoadingBilling] = useState(true);
@@ -1550,7 +1637,7 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
       let chargesQuery = supabase.from('student_charges').select('description, amount').eq('student_id', childInfo.id);
       let paymentsQuery = supabase
         .from('payments')
-        .select('id, amount, method, or_number, paid_at, description')
+        .select('id, amount, method, receipt_number, paid_at, description')
         .eq('student_id', childInfo.id)
         .order('paid_at', { ascending: false });
       if (schoolYearId) {
@@ -1567,10 +1654,11 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
       ]);
       if (cancelled) return;
 
-      let total = (charges || []).reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
-      if (total === 0 && tuitionFee?.annual_fee) {
-        total = Number(tuitionFee.annual_fee);
+      let baseFee = (charges || []).reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
+      if (baseFee === 0 && tuitionFee?.annual_fee) {
+        baseFee = Number(tuitionFee.annual_fee);
       }
+      const total = baseFee;
       const paid = (payments || []).reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
       const balance = Math.max(0, total - paid);
       setBillingInfo({ total, paid, balance });
@@ -1580,7 +1668,8 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
           date: p.paid_at
             ? new Date(p.paid_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
             : '—',
-          description: p.description || `Payment (${p.method || 'N/A'}${p.or_number ? ' • OR# ' + p.or_number : ''})`,
+          description: p.description || `Payment (${p.method || 'N/A'})`,
+          receiptNumber: p.receipt_number || '—',
           amount: Number(p.amount || 0),
           status: 'Paid',
         }))
@@ -1592,29 +1681,39 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
   }, [childInfo?.id, childInfo?.gradeLevel, schoolYear]);
 
   const handleDownloadReceipts = () => {
-    const lines: string[] = [];
-    lines.push('Payment History / Receipts');
-    lines.push(`School Year,${schoolYear}`);
-    lines.push('');
-    lines.push('Date,Description,Amount,Status');
-    paymentHistory.forEach((p) => {
-      lines.push(`${p.date},${p.description},${p.amount},${p.status}`);
-    });
-    lines.push('');
-    lines.push(`Total Fees,,${billingInfo.total}`);
-    lines.push(`Paid,,${billingInfo.paid}`);
-    lines.push(`Balance,,${billingInfo.balance}`);
+    const doc = new jsPDF();
 
-    const csvContent = lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Payment_Receipts_${schoolYear}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DUMAGUETE MISSION SCHOOL', 105, 18, { align: 'center' });
+
+    doc.setFontSize(13);
+    doc.text('PAYMENT HISTORY / RECEIPTS', 105, 27, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Student: ${childInfo.name}`, 14, 40);
+    doc.text(`School Year: ${schoolYear}`, 14, 47);
+
+    autoTable(doc, {
+      startY: 55,
+      head: [['Date', 'Description', 'Receipt #', 'Amount', 'Status']],
+      body: paymentHistory.map((p) => [
+        p.date,
+        p.description,
+        p.receiptNumber,
+        `PHP ${p.amount.toLocaleString()}`,
+        p.status,
+      ]),
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY + 10;
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Total Fees: PHP ${billingInfo.total.toLocaleString()}`, 14, finalY);
+    doc.text(`Paid: PHP ${billingInfo.paid.toLocaleString()}`, 14, finalY + 7);
+    doc.text(`Balance: PHP ${billingInfo.balance.toLocaleString()}`, 14, finalY + 14);
+
+    doc.save(`Payment_Receipts_${childInfo.name.replace(/\s+/g, '_')}_${schoolYear}.pdf`);
   };
 
   return (
@@ -1641,20 +1740,20 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
               }`}
             >
               <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold ${
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 ${
                   selectedChild === child.id
                     ? 'bg-gradient-to-br from-[#c9a961] to-[#d4af37]'
                     : 'bg-gradient-to-br from-[#1a2b4a] to-[#2d4263]'
                 }`}>
                   {child.name.split(' ').map((n: string) => n[0]).join('')}
                 </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{child.name}</p>
-                  <p className="text-sm text-[#6b6456]">{child.grade}</p>
-                  <p className="text-xs text-[#8b8476] font-mono mt-0.5">{child.id}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#1a2b4a] truncate">{child.name}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{child.grade}</p>
+                  <p className="text-xs text-[#8b8476] font-mono mt-0.5 truncate">{child.id}</p>
                 </div>
                 {selectedChild === child.id && (
-                  <CheckCircle className="w-5 h-5 text-[#c9a961]" />
+                  <CheckCircle className="w-5 h-5 text-[#c9a961] flex-shrink-0" />
                 )}
               </div>
             </button>
@@ -1662,53 +1761,93 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
         </div>
       </div>
 
+      {/* Tuition Payment Breakdown - per child, max two per row */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-[#1a2b4a] mb-6">Tuition Payment Breakdown</h3>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {children.map((child: any) => {
+            const { items, total, balance } = getBreakdown(child.id);
+            return (
+              <div key={child.id} className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-[#faf8f5] px-4 py-3 border-b border-gray-200 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                    {child.name.split(' ').map((n: string) => n[0]).join('')}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-[#1a2b4a] truncate">{child.name}</p>
+                    <p className="text-xs text-[#8b8476] truncate">{child.grade}</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[#8b8476] border-b border-gray-200">
+                        <th className="px-4 py-2 font-semibold">Details</th>
+                        <th className="px-4 py-2 font-semibold text-right">Amount</th>
+                        <th className="px-4 py-2 font-semibold text-right">Due</th>
+                        <th className="px-4 py-2 font-semibold text-right">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {items.map((item, idx) => (
+                        <tr key={idx}>
+                          <td className="px-4 py-2 text-[#2c2c2c] whitespace-nowrap">{item.label}</td>
+                          <td className={`px-4 py-2 text-right font-medium whitespace-nowrap ${item.amount < 0 ? 'text-green-600' : 'text-[#2c2c2c]'}`}>
+                            {item.amount < 0 ? `-₱${Math.abs(item.amount).toLocaleString()}` : `₱${item.amount.toLocaleString()}`}
+                          </td>
+                          <td className="px-4 py-2 text-right text-[#6b6456] whitespace-nowrap">
+                            {item.dueDate ? new Date(item.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            {item.remark && (
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                item.remark === 'PAID' ? 'bg-green-100 text-green-700'
+                                : item.remark === 'PARTIAL' ? 'bg-amber-100 text-amber-700'
+                                : item.remark === 'APPLIED' ? 'bg-blue-100 text-blue-700'
+                                : item.remark === 'OVERDUE' ? 'bg-red-200 text-red-800'
+                                : 'bg-red-100 text-red-700'
+                              }`}>
+                                {item.remark}
+                              </span>
+                            )}
+                            {item.datePaid && (
+                              <div className="text-[10px] text-[#8b8476] mt-0.5 whitespace-nowrap">
+                                Date Paid: {new Date(item.datePaid).toLocaleDateString()}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t border-gray-200">
+                        <td className="px-4 py-2 font-semibold text-[#1a2b4a]">Total</td>
+                        <td className="px-4 py-2 text-right font-bold text-[#c9a961]" colSpan={3}>₱{total.toLocaleString()}</td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 pb-3 font-semibold text-[#1a2b4a]">Balance</td>
+                        <td className="px-4 py-2 pb-3 text-right font-bold text-[#7d1935]" colSpan={3}>₱{balance.toLocaleString()}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {loadingBilling ? (
         <div className="p-12 text-center text-[#6b6456]">Loading billing information…</div>
       ) : (
         <>
-          {/* Billing Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-[#1a5c38] rounded-lg p-6 text-white">
-              <Settings className="w-8 h-8 mb-3" />
-              <p className="text-3xl font-bold mb-1">₱{billingInfo.total.toLocaleString()}</p>
-              <p className="text-white/90">Total Fees</p>
-            </div>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-[#2c2c2c]">₱{billingInfo.paid.toLocaleString()}</p>
-                  <p className="text-xs text-[#8b8476]">Paid</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                  <Settings className="w-5 h-5 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-[#2c2c2c]">₱{billingInfo.balance.toLocaleString()}</p>
-                  <p className="text-xs text-[#8b8476]">Balance</p>
-                </div>
-              </div>
-            </div>
-            <div className="bg-gradient-to-br from-[#c9a961] to-[#d4af37] rounded-lg p-6 text-white">
-              <CheckCircle className="w-8 h-8 mb-3" />
-              <p className="text-2xl font-bold mb-1">{billingInfo.balance <= 0 ? 'Fully Paid' : 'Balance Due'}</p>
-              <p className="text-white/90">Payment Status</p>
-            </div>
-          </div>
-
           {/* Payment History */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+            <div className="p-6 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <h3 className="text-lg font-semibold text-[#1a2b4a]">Payment History</h3>
               <button
                 onClick={handleDownloadReceipts}
-                className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:border-[#c9a961] hover:bg-[#faf8f5] bg-[#1a5c38] text-[#ffffff] transition-all "
+                className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:border-[#c9a961] hover:shadow-lg bg-[#1a5c38] text-[#ffffff] transition-all w-full sm:w-auto"
               >
                 <Download className="w-4 h-4" />
                 <span className="text-sm font-medium">Download Receipts</span>
@@ -1720,6 +1859,7 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
                   <tr>
                     <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Date</th>
                     <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Description</th>
+                    <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Receipt No.</th>
                     <th className="text-right px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Amount</th>
                     <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Status</th>
                   </tr>
@@ -1727,7 +1867,7 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
                 <tbody className="divide-y divide-gray-200">
                   {paymentHistory.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-sm text-[#8b8476]">
+                      <td colSpan={5} className="px-6 py-8 text-center text-sm text-[#8b8476]">
                         No payments recorded yet for this school year.
                       </td>
                     </tr>
@@ -1736,6 +1876,7 @@ function BillingPayments({ schoolYear, children, selectedChild, setSelectedChild
                       <tr key={index} className="hover:bg-[#faf8f5] transition-colors">
                         <td className="px-6 py-4 text-sm text-[#2c2c2c]">{payment.date}</td>
                         <td className="px-6 py-4 text-sm text-[#2c2c2c]">{payment.description}</td>
+                        <td className="px-6 py-4 text-sm text-[#2c2c2c] font-mono">{payment.receiptNumber}</td>
                         <td className="px-6 py-4 text-sm text-right font-semibold text-[#2c2c2c]">
                           ₱{payment.amount.toLocaleString()}
                         </td>
@@ -1764,13 +1905,15 @@ function MyProfile({ user, children }: any) {
     .map((n: string) => n[0])
     .join('');
 
+  // Occupation is recorded per-child at enrollment (mother_info/father_info/guardian_info),
+  // not on the guardian account itself — pull it from whichever linked child has it on file.
+  const occupation = (children || []).find((c: any) => c.guardianOccupation)?.guardianOccupation || 'Not provided';
+
   const profileFields = [
-    { label: 'Full Name', value: user?.name || 'Not provided', icon: User },
-    { label: 'Parent / Guardian ID', value: user?.id || 'Not provided', icon: IdCard },
+    { label: 'Full Name', value: user?.name || user?.firstName || 'Not provided', icon: User },
+    { label: 'Occupation', value: occupation, icon: Briefcase },
     { label: 'Email Address', value: user?.email || 'Not provided', icon: Mail },
-    { label: 'Phone Number', value: user?.phone || 'Not provided', icon: Phone },
-    { label: 'Address', value: user?.address || 'Not provided', icon: MapPin },
-    { label: 'Role', value: user?.role || 'Parent', icon: Shield }
+    { label: 'Phone Number', value: user?.phone || 'Not provided', icon: Phone }
   ];
 
   return (
@@ -1778,23 +1921,6 @@ function MyProfile({ user, children }: any) {
       <div>
         <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">My Profile</h1>
         <p className="text-[#6b6456]">View your account details and linked students</p>
-      </div>
-
-      {/* Profile Banner */}
-      <div className="bg-[#1a5c38] rounded-xl p-8 text-white w-md">
-        <div className="flex items-center gap-6">
-          <div className="w-20 h-20 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-3xl font-bold flex-shrink-0">
-            {initials}
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold mb-1">{user?.name || 'Parent'}</h2>
-            <p className="text-white/80">{user?.email || 'No email on file'}</p>
-            <span className="inline-flex items-center gap-1.5 mt-3 px-3 py-1 bg-white/15 rounded-full text-xs font-semibold">
-              <Shield className="w-3 h-3" />
-              {user?.role || 'Parent / Guardian'}
-            </span>
-          </div>
-        </div>
       </div>
 
       {/* Account Details */}
@@ -1883,12 +2009,12 @@ function MessagingCenter({ user }: any) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Messages</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#1a2b4a] mb-2">Messages</h1>
           <p className="text-[#6b6456]">Communication with teachers and school administration</p>
         </div>
-        <button className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg hover:shadow-lg transition-all">
+        <button className="flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg hover:shadow-lg transition-all w-full sm:w-auto">
           <Mail className="w-5 h-5" />
           <span className="font-medium">New Message</span>
         </button>
@@ -1906,24 +2032,24 @@ function MessagingCenter({ user }: any) {
             <div key={message.id} className={`p-6 hover:bg-[#faf8f5] transition-colors cursor-pointer ${
               !message.read ? 'bg-[#c9a961]/5' : ''
             }`}>
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
+              <div className="flex items-start gap-3 sm:gap-4">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-full flex items-center justify-center text-white font-bold flex-shrink-0">
                   {message.from.charAt(0)}
                 </div>
-                <div className="flex-1">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <h3 className="font-semibold text-[#1a2b4a]">{message.from}</h3>
-                      <p className="text-sm text-[#2c2c2c] font-medium">{message.subject}</p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 mb-2">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-[#1a2b4a] truncate">{message.from}</h3>
+                      <p className="text-sm text-[#2c2c2c] font-medium break-words">{message.subject}</p>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm text-[#6b6456]">{message.date}</span>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="text-sm text-[#6b6456] whitespace-nowrap">{message.date}</span>
                       {!message.read && (
                         <div className="w-2 h-2 bg-[#c9a961] rounded-full"></div>
                       )}
                     </div>
                   </div>
-                  <p className="text-sm text-[#6b6456]">{message.preview}</p>
+                  <p className="text-sm text-[#6b6456] break-words">{message.preview}</p>
                 </div>
               </div>
             </div>

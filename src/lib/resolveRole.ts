@@ -14,6 +14,28 @@ export interface ResolvedIdentity {
     userData: Record<string, any>;
 }
 
+// Guardians are stored as "Last, First Middle" (see AdminDashboard's splitGuardianFullName) —
+// split on the comma rather than assuming "First Middle Last" word order.
+function guardianFirstName(fullName: string): string {
+    const [lastRaw, restRaw] = (fullName || '').split(',');
+    if (restRaw !== undefined) {
+        return restRaw.trim().split(/\s+/).filter(Boolean)[0] || '';
+    }
+    return lastRaw.trim().split(/\s+/).filter(Boolean)[0] || '';
+}
+
+// Reformats a "Last, First Middle" guardian name into "First M. Last" for display
+// (e.g. Parent Portal's My Profile), matching the student ID card's name format.
+function formatGuardianName(fullName: string): string {
+    const [lastRaw, restRaw] = (fullName || '').split(',');
+    if (restRaw === undefined) return fullName;
+    const last = lastRaw.trim();
+    const restWords = restRaw.trim().split(/\s+/).filter(Boolean);
+    const first = restWords[0] || '';
+    const middle = restWords.slice(1).join(' ');
+    return `${first}${middle ? ` ${middle.trim().charAt(0)}.` : ''} ${last}`.trim();
+}
+
 /**
  * Resolves a signed-in auth.users id to an app role + user data by checking,
  * in order: profiles (staff incl. guard) -> guardians (parent) -> student_accounts (student).
@@ -78,7 +100,8 @@ export async function resolveIdentity(userId: string): Promise<ResolvedIdentity 
             role: 'parent',
             userData: {
                 id: guardian.id,
-                name: guardian.full_name,
+                name: formatGuardianName(guardian.full_name),
+                firstName: guardianFirstName(guardian.full_name),
                 email: guardian.email,
                 phone: guardian.phone,
                 enrollmentConfirmed,

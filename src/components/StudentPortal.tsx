@@ -2,12 +2,15 @@ import { useState, useEffect } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
+import { fetchAssignedTeacherMap } from '../lib/schedule';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   LayoutDashboard, BookOpen, Calendar, Award, Download, User, Mail,
   Phone, MapPin, Clock, X, Eye, AlertCircle, LogOut
 } from 'lucide-react';
 
-type SubjectGrade = { subject: string; q1: number | null; q2: number | null; q3: number | null; q4: number | null; final: number | null; color: string };
+type SubjectGrade = { subject: string; teacher: string; q1: number | null; q2: number | null; q3: number | null; q4: number | null; final: number | null; color: string };
 type ScheduleItem = { time: string | null; subject: string | null; teacher: string | null; room: string | null };
 
 // ---------------------------------------------------------------------------
@@ -76,7 +79,8 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
         .select(`
           id, q1, q2, q3, q4, final_grade,
           class_section_subjects (
-            subjects ( name )
+            subjects ( name ),
+            employees ( full_name )
           )
         `)
         .eq('student_id', studentId)
@@ -90,7 +94,8 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
 
       const mapped: SubjectGrade[] = (data ?? [])
         .map((row: any, index: number) => ({
-          subject: row.class_section_subjects?.[0]?.subjects?.[0]?.name ?? row.class_section_subjects?.subjects?.name ?? 'Subject',
+          subject: row.class_section_subjects?.subjects?.name ?? row.class_section_subjects?.[0]?.subjects?.[0]?.name ?? 'Subject',
+          teacher: row.class_section_subjects?.employees?.full_name ?? row.class_section_subjects?.[0]?.employees?.[0]?.full_name ?? 'To Be Assigned',
           q1: row.q1 != null ? Number(row.q1) : null,
           q2: row.q2 != null ? Number(row.q2) : null,
           q3: row.q3 != null ? Number(row.q3) : null,
@@ -109,6 +114,27 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
   }, [studentId, schoolYear]);
 
   const overallGPA = computeOverallGPA(subjectGrades.filter((g) => g.final != null));
+
+  // Restricts the header year-switcher to years this student actually has an enrollment
+  // record for — a new student sees no prior years; a continuing student sees every year
+  // back to whichever one they first enrolled in.
+  const [availableYears, setAvailableYears] = useState<string[] | undefined>(undefined);
+
+  useEffect(() => {
+    if (!studentId) { setAvailableYears(undefined); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('enrollments')
+        .select('school_years(label)')
+        .eq('student_id', studentId);
+      if (cancelled) return;
+      const labels = Array.from(new Set((data ?? []).map((r: any) => r.school_years?.label).filter(Boolean)));
+      if (schoolYear && !labels.includes(schoolYear)) labels.push(schoolYear);
+      setAvailableYears(labels);
+    })();
+    return () => { cancelled = true; };
+  }, [studentId, schoolYear]);
 
   if (user?.enrollmentConfirmed === false) {
     return (
@@ -147,12 +173,13 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
       onLogout={onLogout}
       schoolYear={schoolYear}
       onSchoolYearChange={setSchoolYear}
+      availableYears={availableYears}
     >
       {activeView === 'overview' && (
         <StudentOverview user={user} schoolYear={schoolYear} onNavigate={setActiveView} />
       )}
       {activeView === 'grades' && (
-        <GradesProgress schoolYear={schoolYear} overallGPA={overallGPA} subjectGrades={subjectGrades} />
+        <GradesProgress user={user} schoolYear={schoolYear} overallGPA={overallGPA} subjectGrades={subjectGrades} />
       )}
       {activeView === 'schedule' && <ScheduleView user={user} schoolYear={schoolYear} />}
       {activeView === 'profile' && (
@@ -224,12 +251,15 @@ function StudentOverview({ user, onNavigate }: { user: any; schoolYear: string; 
         return;
       }
 
+      const teacherMap = await fetchAssignedTeacherMap(gradeLevel, section);
+      if (cancelled) return;
+
       const mapped: ScheduleItem[] = (data ?? [])
         .filter((row: any) => Array.isArray(row.days) && row.days.includes(todayAbbr))
         .map((row: any) => ({
           time: row.time_label,
           subject: row.subject,
-          teacher: row.teacher,
+          teacher: teacherMap[row.subject] || row.teacher,
           room: row.room
         }));
 
@@ -244,9 +274,9 @@ function StudentOverview({ user, onNavigate }: { user: any; schoolYear: string; 
   return (
     <div className="space-y-6">
       {/* Welcome Banner */}
-      <div className="bg-[#1e3a8a] rounded-xl p-8 text-white">
-        <h1 className="text-3xl font-bold mb-2">Welcome back, {firstName}!</h1>
-        <div className="flex items-center gap-6 text-sm flex-wrap">
+      <div className="bg-[#1e3a8a] rounded-xl p-5 sm:p-8 text-white">
+        <h1 className="text-2xl sm:text-3xl font-bold mb-2">Welcome back, {firstName}!</h1>
+        <div className="flex items-center gap-4 sm:gap-6 text-sm flex-wrap">
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4" />
             <span>{todayLabel}</span>
@@ -265,8 +295,8 @@ function StudentOverview({ user, onNavigate }: { user: any; schoolYear: string; 
       {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-1 gap-6">
         {/* Today's Schedule */}
-        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-6">
+        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-6">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
             <h3 className="text-lg font-semibold text-[#1a2b4a]">Today's Classes</h3>
             <button
               onClick={() => onNavigate('schedule')}
@@ -282,16 +312,16 @@ function StudentOverview({ user, onNavigate }: { user: any; schoolYear: string; 
             {todayClasses.map((classItem, index) => (
               <div
                 key={index}
-                className="flex items-center gap-4 p-4 bg-[#faf8f5] rounded-lg border border-gray-200 hover:border-[#c9a961] transition-all"
+                className="flex items-center gap-3 sm:gap-4 p-4 bg-[#faf8f5] rounded-lg border border-gray-200 hover:border-[#c9a961] transition-all"
               >
-                <div className="w-20 flex-shrink-0">
-                  <p className="text-xs font-semibold text-[#7d1935]">{classItem.time}</p>
+                <div className="w-16 sm:w-20 flex-shrink-0">
+                  <p className="text-xs font-semibold text-[#7d1935]">{formatTimeRange12(classItem.time)}</p>
                 </div>
-                <div className="flex-1">
-                  <p className="font-semibold text-[#1a2b4a]">{classItem.subject}</p>
-                  <p className="text-sm text-[#6b6456]">{classItem.teacher}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[#1a2b4a] truncate">{classItem.subject}</p>
+                  <p className="text-sm text-[#6b6456] truncate">{classItem.teacher}</p>
                 </div>
-                <div className="text-xs text-[#8b8476]">{classItem.room}</div>
+                <div className="text-xs text-[#8b8476] flex-shrink-0 max-w-[4.5rem] truncate text-right">{classItem.room}</div>
               </div>
             ))}
           </div>
@@ -304,26 +334,44 @@ function StudentOverview({ user, onNavigate }: { user: any; schoolYear: string; 
 // ---------------------------------------------------------------------------
 // Grades & Progress
 // ---------------------------------------------------------------------------
-function GradesProgress({ schoolYear, overallGPA, subjectGrades }: { schoolYear: string; overallGPA: string; subjectGrades: SubjectGrade[] }) {
+function GradesProgress({ user, schoolYear, overallGPA, subjectGrades }: { user: any; schoolYear: string; overallGPA: string; subjectGrades: SubjectGrade[] }) {
   const [showPreview, setShowPreview] = useState(false);
 
   const handleDownload = () => {
-    const header = 'Subject,Q1,Q2,Q3,Q4,Final\n';
-    const rows = subjectGrades
-      .map((g) => `${g.subject},${g.q1 ?? ''},${g.q2 ?? ''},${g.q3 ?? ''},${g.q4 ?? ''},${g.final ?? ''}`)
-      .join('\n');
-    const footer = `\nOverall GPA,,,,,${overallGPA}`;
-    const csvContent = header + rows + footer;
+    const studentName = user?.name ?? 'Student';
+    const studentId = user?.studentId ?? user?.id ?? 'Not on file';
 
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Grade_Report_${schoolYear}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    const doc = new jsPDF();
+
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DUMAGUETE MISSION SCHOOL', 105, 18, { align: 'center' });
+
+    doc.setFontSize(13);
+    doc.text('ACADEMIC PROGRESS REPORT', 105, 27, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Student: ${studentName}`, 14, 40);
+    doc.text(`Student ID: ${studentId}`, 14, 47);
+    doc.text(`School Year: ${schoolYear}`, 14, 54);
+    doc.text(`Overall GPA: ${overallGPA}`, 14, 61);
+
+    autoTable(doc, {
+      startY: 69,
+      head: [['Subject', 'Teacher', 'Q1', 'Q2', 'Q3', 'Q4', 'Final']],
+      body: subjectGrades.map((g) => [
+        g.subject,
+        g.teacher,
+        g.q1 ?? '—',
+        g.q2 ?? '—',
+        g.q3 ?? '—',
+        g.q4 ?? '—',
+        g.final ?? '—',
+      ]),
+    });
+
+    doc.save(`${studentName.replace(/\s+/g, '_')}_Grade_Report_${schoolYear}.pdf`);
   };
 
   return (
@@ -335,32 +383,33 @@ function GradesProgress({ schoolYear, overallGPA, subjectGrades }: { schoolYear:
 
       {/* Detailed Grades Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+        <div className="p-4 sm:p-6 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-[#1a2b4a]">Detailed Grade Report</h3>
           <button
             onClick={() => setShowPreview(true)}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:border-[#fffff] hover:bg-[#1e3a8a] transition-all bg-[#1a2b4a]"
+            className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:border-[#fffff] hover:bg-[#1e3a8a] transition-all bg-[#1a2b4a] self-start sm:self-auto"
           >
             <Download className="w-4 h-4 text-white" />
             <span className="text-sm font-medium text-white">Download Report</span>
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[640px]">
             <thead className="bg-[#faf8f5] border-b border-gray-200">
               <tr>
-                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Subject</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q1</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q2</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q3</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Q4</th>
-                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a]">Final</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Subject</th>
+                <th className="text-left px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Teacher</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q1</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q2</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q3</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Q4</th>
+                <th className="text-center px-6 py-4 text-sm font-semibold text-[#1a2b4a] whitespace-nowrap">Final</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {subjectGrades.length === 0 && (
                 <tr>
-                  <td className="px-6 py-6 text-center text-sm text-[#8b8476]" colSpan={6}>
+                  <td className="px-6 py-6 text-center text-sm text-[#8b8476]" colSpan={7}>
                     No grades on file yet for this school year.
                   </td>
                 </tr>
@@ -373,6 +422,7 @@ function GradesProgress({ schoolYear, overallGPA, subjectGrades }: { schoolYear:
                       <span className="font-medium text-[#2c2c2c]">{grade.subject}</span>
                     </div>
                   </td>
+                  <td className="px-6 py-4 text-sm text-[#6b6456]">{grade.teacher}</td>
                   <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q1 ?? '—'}</td>
                   <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q2 ?? '—'}</td>
                   <td className="px-6 py-4 text-center text-[#2c2c2c]">{grade.q3 ?? '—'}</td>
@@ -388,7 +438,7 @@ function GradesProgress({ schoolYear, overallGPA, subjectGrades }: { schoolYear:
                   shown in the Academic Information grid on My Profile. */}
               <tr className="bg-[#faf8f5]">
                 <td className="px-6 py-4 font-bold text-[#1a2b4a]">Overall GPA</td>
-                <td className="px-6 py-4" colSpan={4}></td>
+                <td className="px-6 py-4" colSpan={5}></td>
                 <td className="px-6 py-4 text-center">
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#1a2b4a] text-white">
                     {overallGPA}
@@ -423,27 +473,32 @@ function ReportPreviewModal({ grades, overallGPA, schoolYear, onClose, onDownloa
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+        className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between p-5 border-b border-gray-200 sticky top-0 bg-white">
-          <div>
+        <div className="flex items-center justify-between gap-3 p-4 sm:p-5 border-b border-gray-200 sticky top-0 bg-white">
+          <div className="min-w-0">
             <h3 className="text-lg font-semibold text-[#1a2b4a] flex items-center gap-2">
-              <Eye className="w-5 h-5 text-[#c9a961]" />
+              {/* <Eye className="w-5 h-5 text-[#c9a961]" /> */}
               Report Preview
             </h3>
             <p className="text-xs text-[#8b8476] mt-1">School Year {schoolYear}</p>
           </div>
-          <button onClick={onClose} className="text-[#8b8476] hover:text-[#7d1935]">
+          <button
+            onClick={onClose}
+            className="flex items-center justify-center w-10 h-10 -m-2 flex-shrink-0 text-[#8b8476] hover:text-[#7d1935]"
+            aria-label="Close"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-5">
-          <table className="w-full text-sm">
+        <div className="p-4 sm:p-5 overflow-x-auto">
+          <table className="w-full text-sm min-w-[480px]">
             <thead>
               <tr className="border-b border-gray-200">
                 <th className="text-left py-2 text-[#1a2b4a]">Subject</th>
+                <th className="text-left py-2 text-[#1a2b4a]">Teacher</th>
                 <th className="text-center py-2 text-[#1a2b4a]">Q1</th>
                 <th className="text-center py-2 text-[#1a2b4a]">Q2</th>
                 <th className="text-center py-2 text-[#1a2b4a]">Q3</th>
@@ -455,6 +510,7 @@ function ReportPreviewModal({ grades, overallGPA, schoolYear, onClose, onDownloa
               {grades.map((g, i) => (
                 <tr key={i}>
                   <td className="py-2 text-[#2c2c2c]">{g.subject}</td>
+                  <td className="py-2 text-[#6b6456]">{g.teacher}</td>
                   <td className="py-2 text-center text-[#2c2c2c]">{g.q1}</td>
                   <td className="py-2 text-center text-[#2c2c2c]">{g.q2}</td>
                   <td className="py-2 text-center text-[#2c2c2c]">{g.q3}</td>
@@ -464,14 +520,14 @@ function ReportPreviewModal({ grades, overallGPA, schoolYear, onClose, onDownloa
               ))}
               <tr className="border-t-2 border-gray-200">
                 <td className="py-2 font-bold text-[#1a2b4a]">Overall GPA</td>
-                <td className="py-2" colSpan={4}></td>
+                <td className="py-2" colSpan={5}></td>
                 <td className="py-2 text-center font-bold text-[#c9a961]">{overallGPA}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <div className="flex justify-end gap-3 p-5 border-t border-gray-200">
+        <div className="flex flex-col-reverse sm:flex-row justify-end gap-3 p-4 sm:p-5 border-t border-gray-200">
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium text-[#6b6456] hover:bg-[#faf8f5] rounded-lg"
@@ -480,10 +536,10 @@ function ReportPreviewModal({ grades, overallGPA, schoolYear, onClose, onDownloa
           </button>
           <button
             onClick={onDownload}
-            className="flex items-center gap-2 px-4 py-2 bg-[#1a2b4a] text-white text-sm font-medium rounded-lg hover:bg-[#24365c] transition-colors"
+            className="flex items-center justify-center gap-2 px-4 py-2 bg-[#1a2b4a] text-white text-sm font-medium rounded-lg hover:bg-[#24365c] transition-colors"
           >
             <Download className="w-4 h-4" />
-            Download CSV
+            Download PDF
           </button>
         </div>
       </div>
@@ -494,6 +550,21 @@ function ReportPreviewModal({ grades, overallGPA, schoolYear, onClose, onDownloa
 // ---------------------------------------------------------------------------
 // Schedule View
 // ---------------------------------------------------------------------------
+// Converts a "HH:MM-HH:MM" 24-hour time_label into a 12-hour "h:mm AM - h:mm AM" range.
+function formatTimeRange12(timeLabel: string | null): string {
+  if (!timeLabel) return '';
+  const to12 = (t: string) => {
+    const [h, m] = t.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return t;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
+  };
+  const [start, end] = timeLabel.split('-');
+  if (!end) return to12(start);
+  return `${to12(start)} - ${to12(end)}`;
+}
+
 const WEEK_DAYS = [
   { abbr: 'Mon', label: 'Monday' },
   { abbr: 'Tue', label: 'Tuesday' },
@@ -504,6 +575,7 @@ const WEEK_DAYS = [
 
 function ScheduleView({ user }: { user: any; schoolYear: string }) {
   const [scheduleRows, setScheduleRows] = useState<any[]>([]);
+  const [teacherMap, setTeacherMap] = useState<Record<string, string>>({});
 
   const gradeLevel = user?.grade ?? user?.student?.grade_level ?? null;
   const section = user?.student?.section ?? null;
@@ -530,6 +602,10 @@ function ScheduleView({ user }: { user: any; schoolYear: string }) {
         return;
       }
       setScheduleRows(data ?? []);
+
+      const map = await fetchAssignedTeacherMap(gradeLevel, section);
+      if (cancelled) return;
+      setTeacherMap(map);
     })();
 
     return () => {
@@ -544,9 +620,10 @@ function ScheduleView({ user }: { user: any; schoolYear: string }) {
       .map((row: any) => ({
         time: row.time_label,
         subject: row.subject,
-        teacher: row.teacher,
+        teacher: teacherMap[row.subject] || row.teacher,
         room: row.room
       }))
+      .sort((a, b) => (a.time || '').localeCompare(b.time || ''))
   }));
 
   const sectionLabel = [gradeLevel, section].filter(Boolean).join(', ');
@@ -559,7 +636,8 @@ function ScheduleView({ user }: { user: any; schoolYear: string }) {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-px bg-gray-200">
+        <div className="overflow-x-auto">
+        <div className="grid grid-flow-col auto-cols-[minmax(200px,1fr)] lg:grid-flow-row lg:grid-cols-5 lg:auto-cols-auto gap-px bg-gray-200">
           {weeklySchedule.map(({ label, classes }) => (
             <div key={label} className="bg-white">
               <div className="bg-[#1e3a8a] p-4 text-center">
@@ -574,7 +652,7 @@ function ScheduleView({ user }: { user: any; schoolYear: string }) {
                     key={index}
                     className="p-3 bg-[#faf8f5] rounded-lg border border-gray-200 hover:border-[#c9a961] transition-all"
                   >
-                    <p className="text-xs font-semibold text-[#7d1935] mb-2">{item.time}</p>
+                    <p className="text-xs font-semibold text-[#7d1935] mb-2">{formatTimeRange12(item.time)}</p>
                     <p className="text-sm font-medium text-[#1a2b4a] mb-1">{item.subject}</p>
                     <p className="text-xs text-[#8b8476] mb-1">{item.teacher}</p>
                     <p className="text-xs text-[#6b6456]">{item.room}</p>
@@ -583,6 +661,7 @@ function ScheduleView({ user }: { user: any; schoolYear: string }) {
               </div>
             </div>
           ))}
+        </div>
         </div>
       </div>
     </div>
@@ -601,7 +680,15 @@ function ProfileView({ user, schoolYear, overallGPA }: { user: any; schoolYear: 
     .filter(Boolean)
     .join(' ') || user.name || 'Not on file';
   const gradeLevel = [student.grade_level, student.section].filter(Boolean).join(', ') || user.grade || 'Not on file';
-  const hasGuardian = Boolean(student.guardian_name);
+  const composeParentName = (p: any) => p ? [p.first_name, p.middle_name, p.last_name].filter(Boolean).join(' ') || null : null;
+  const motherName = composeParentName(student.mother_info);
+  const fatherName = composeParentName(student.father_info);
+  // guardian_name/guardian_phone on the student row are the *designated portal
+  // contact* (may be the mother or father — see EnrollmentSection's handleEnroll),
+  // not necessarily an actual Guardian. The real Guardian collected at enrollment,
+  // if any, lives in guardian_info; fall back to N/A rather than the portal contact.
+  const guardianName = composeParentName(student.guardian_info);
+  const hasGuardian = Boolean(guardianName);
 
   return (
     <div className="space-y-6">
@@ -650,7 +737,6 @@ function ProfileView({ user, schoolYear, overallGPA }: { user: any; schoolYear: 
               <Field label="Grade Level" value={gradeLevel} />
               <Field label="Nationality" value={student.nationality || 'Not on file'} />
               <Field label="Religion" value={student.religion || 'Not on file'} />
-              <Field label="Blood Type" value={student.blood_type || 'Not on file'} />
               <Field label="Home Address" value={student.home_address || 'Not on file'} />
             </div>
           </div>
@@ -662,27 +748,58 @@ function ProfileView({ user, schoolYear, overallGPA }: { user: any; schoolYear: 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Student ID" value={user.id} />
               <Field label="School Year" value={schoolYear} />
-              <Field label="Current GPA" value={overallGPA} highlight />
             </div>
           </div>
 
-          {/* Guardian Information */}
+          {/* Parent/Guardian Information — shows Mother and Father details when
+              filled up in the Enrollment form; N/A for whichever wasn't, alongside
+              the designated Guardian on file (guardian_name/phone/email). */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-[#1a2b4a] mb-1">Guardian Information</h3>
+            <h3 className="text-lg font-semibold text-[#1a2b4a] mb-1">Parent/Guardian Information</h3>
             <p className="text-xs text-[#8b8476] mb-5">
               Authorized parent/guardian for student pick-up and communication
             </p>
 
-            {hasGuardian ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Guardian Name" value={student.guardian_name} />
-                <Field label="Relationship" value={student.guardian_relationship || 'Not on file'} />
-                <Field label="Contact Number" value={student.guardian_phone || 'Not on file'} />
-                <Field label="Email" value={student.guardian_email || 'Not on file'} />
+            <div className="space-y-6">
+              <div>
+                <h4 className="text-sm font-semibold text-[#1a2b4a] mb-3">Mother</h4>
+                {motherName ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Field label="Name" value={motherName} />
+                    <Field label="Contact Number" value={student.mother_info?.phone || 'N/A'} />
+                    <Field label="Occupation" value={student.mother_info?.occupation || 'N/A'} />
+                  </div>
+                ) : (
+                  <Field label="Name" value="N/A" />
+                )}
               </div>
-            ) : (
-              <p className="text-sm text-[#8b8476]">No guardian on file.</p>
-            )}
+
+              <div>
+                <h4 className="text-sm font-semibold text-[#1a2b4a] mb-3">Father</h4>
+                {fatherName ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Field label="Name" value={fatherName} />
+                    <Field label="Contact Number" value={student.father_info?.phone || 'N/A'} />
+                    <Field label="Occupation" value={student.father_info?.occupation || 'N/A'} />
+                  </div>
+                ) : (
+                  <Field label="Name" value="N/A" />
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold text-[#1a2b4a] mb-3">Guardian</h4>
+                {hasGuardian ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Field label="Name" value={guardianName} />
+                    <Field label="Relationship" value={student.guardian_info?.relationship || 'N/A'} />
+                    <Field label="Contact Number" value={student.guardian_info?.phone || 'N/A'} />
+                  </div>
+                ) : (
+                  <Field label="Name" value="N/A" />
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>

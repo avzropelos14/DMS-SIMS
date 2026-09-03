@@ -1,12 +1,121 @@
-//admin part
+Administrator Dashboard and Registrar Dashboard (Student Management Section)
+- Add another button in the dropdown labeled "Active" and remove all of the archive buttons.
 
-{(['Active', 'Graduate', 'Dropped', 'Transferred'] as StudentStatus[]).map(tab => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 transition-all ${activeTab === tab ? 'border-[#1a2b4a] bg-[#1a2b4a] text-white' : 'border-gray-200 text-[#6b6456] bg-white hover:border-[#1a2b4a]/30'}`}
-          >
-            <span>{tab}</span>
-            <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${activeTab === tab ? 'bg-white/25 text-white' : 'bg-gray-100 text-[#6b6456]'}`}>{counts[tab]}</span>
-          </button>
-        ))}
+Administrator Dashboard (Class Management Section)
+- When clicking on the Assign Students Button, remove the preview and make the searchbar search all the enrolled students of the selected grade level; for example if the student is enrolled in Grade 1 the searchbar should only search for those who are enrolled in Grade 1 and same applies to all grade levels.
+
+Administrator Dashboard (System Settings Section)
+- For the Academic Configuration of the Grading Period Status the button for opening up the Quarter Grading isn't working. 
+
+Cashier (Process Payment Section)
+- The print style of the receipt should be changed, it should not print the whole page layout of the computer only just the receipt.
+
+Cashier (Payment History Section)
+- The receipt number set in the Administrator should reflect in the Receipt No., remove the Reference Column in the as well. 
+
+Cashier (Student Accounts Section)
+- Remove the Grade column as the Grade level of the student can be seen when clicking the view button.
+
+
+
+summary
+
+Summary of changes, all in AdminDashboard.tsx and CashierPortal.tsx unless noted:
+
+Student Management dropdown: added a real "Active" tab (filters strictly status === 'Active') alongside the existing "All" tab, and removed the separate Archive button/modal/state entirely (showArchiveModal, archiveStudent, archiveError).
+Assign Students panel: search now only queries students in the target class's grade level, and no longer shows a full-roster preview — results only appear once you start typing.
+Quarter Grading button: root cause was that grading_periods rows are never seeded for a new school year, so the old update() calls silently matched zero rows and never persisted. Switched to upsert() (using the school_year_id, quarter unique constraint I verified in the DB) so opening/closing a quarter always writes a row, even the first time.
+Process Payment receipt print: added a .print-receipt class + @media print rule in index.css that hides everything except the receipt card when printing, and hid the action buttons/icon via print:hidden.
+Payment History: the "Receipt No." column was showing a truncated payment UUID while the real admin-issued receipt number was mislabeled as "Reference" — swapped Receipt No. to show that value and removed the now-redundant Reference column/CSV field/receipt-modal line (in both the table and the View/Print Receipt modals).
+Cashier Student Accounts table: removed the Grade column (and adjusted colSpans) since grade is visible via the view button.
+npx tsc --noEmit and a full vite build both pass clean.
+
+
+
+
+Registrar Dashboard (Schedule & Classes Section)
+- Remove the Sat. column from the calendar and also the sat button from the Create Schedule table.
+
+Teacher Dashboard (My Classes Section)
+- I want you to remove the schedule row from the Classroom preview grids as when you click on the View Class Details the schedule can be seen there. Also remove the room number just bottom of the Grade Class name as the room number is already placed in the bottom.
+- Inside the View Class Details the Student List table change the table titles of each column Quarter 1-4 into Q1, Q2, Q3, Q4. Remove the Grade column as the grade can already be seen at the top. Fix the Calendar content as well instead of Mon, Tue, and so on, do it into a single letter of each day and to the side the time.
+
+Teacher Dashboard (Dashboard)
+- Fix the View full Schedule button to connect it to the Class Schedule.
+
+
+
+
+
+
+
+Registrar Dashboard (Enrollment Form)
+- The problem of the second child when linking to the same parent is that the system generates another set of email, fix it please when the parent enroll more than the one child the credentials of the parent will not be generated anew but instead will utilize the current credentials it already has and link the child to the same parent when selected.
+- On the Parent/Guardian Information Searchbar when the name has been clicked to fill up the forms it should make it detect properly as when I pressed on the selected parent for fill up instead of the last name going to the field for the last name it went over to the first name and vice versa. Also it should also detect if the parent is a mother or father not those buttons on the side of the name that says Use as Mother, Use as Father, Use as Guardian.
+
+Cashier Dashboard (Process Payment Section)
+- When the admin has set the tuition fee for the school year, it must also reflect in the Payment Details of the Cashier when the Enrollment button has been pressed.
+
+Student Dashboard (My Profile Section)
+- Change the Guardian Information grid into a Parent/Guardian Information wherein when both of the Mother and Father Information has been filled up in the Enrollment it should also be reflected here. Otherwise when there are neither information just place N/A on the mother and father and place the designated guardian of the student.
+
+Summary:
+
+Duplicate parent credentials on second child — already fixed by an earlier commit (create-guardian-account edge function dedups by email; verified the deployed function on Supabase). No change needed.
+
+Guardian search autofill swapping first/last name — found the actual bug: guardian names are stored as "Last, First Middle" (comma format), but splitStudentName assumed space-separated "First Middle Last" order, so the comma-joined string split incorrectly. Added splitGuardianFullName in AdminDashboard.tsx that parses the comma format correctly, and used it in fillContactFromGuardian. Also added relationship auto-detection: the search now joins student_guardians to find each guardian's most recent relationship, shows "(on file as Mother)" next to their name, and swaps the three buttons for one highlighted "Use as Mother/Father/Guardian" button — so the registrar no longer has to guess which one to click.
+
+Cashier Payment Details not reflecting admin's tuition fee — the calculation logic was already correct, but tuitionFees/enrollmentFees were only loaded once at app login in App.tsx, so a cashier's already-open session wouldn't pick up fee changes an admin made afterward. CashierPortal.tsx now refetches fees straight from Supabase whenever the cashier switches tabs (including into Process Payment), so it always reflects the latest admin-configured amounts.
+
+Student profile Guardian grid — renamed to "Parent/Guardian Information" in StudentPortal.tsx and split into Mother / Father / Guardian subsections, pulling from mother_info/father_info JSON (populated at enrollment). Shows "N/A" for whichever parent wasn't filled in, and always shows the designated guardian contact.
+
+tsc --noEmit passes cleanly on all changes.
+
+
+
+
+Registrar Dashboard (Enrollment Section)
+- For the Academic Placemen, instead of the Section being a text input turn it into a dropdown button wherein only the sections created by the Administrator can be shown; like if the Administrator on the Class Management Section created sections A and B for Grade 2 then it will only show A and B on the Academic Placement when Grade 2 is selected.
+
+Cashier Dashboard (Process Payment Section) & Registrar Dashboard (Enrollment Section)
+- When a new student is getting enrolled once the details are inputted and submitted it must be place in another grid just underneath the Pending Re-Enrollment and the name of that grid will be "Pending Enrollment" meaning that when a new student is getting enrolled his details are saved and he will be placed in the Pending Enrollment grid. Once that happens, that student's name can now be searched by the cashier wherein the payment details will only show the enrollment fee and once the student has paid, they can now go back to the registrar to verify that they have paid the enrollment fee in which the registrar can search through the Receipts Section for the enrollment receipt number for confirmation and once it is done, the student and it's parent will now have access to their portal.
+
+Parent Dashboard (Dashboard Section and Billing Payments Section)
+- I want you to reflect the tuition fee breakdown of each child in each section.
+
+
+
+All three Todos.md items are implemented and the project builds cleanly (verified pre-existing unused-var warnings are unrelated to this work). Summary:
+
+Academic Placement Section dropdown (AdminDashboard.tsx): the Enrollment form's Section field is now a <select> populated from class_sections filtered by the chosen Grade Level — same source Class Management writes to — with a sensible fallback if a grade has no sections defined yet. Selecting a new grade resets the section to the first valid option.
+
+Pending Enrollment → Cashier payment → Registrar confirmation (AdminDashboard.tsx, CashierPortal.tsx): removed the old self-certified "fee already paid" checkbox. New/transferee enrollments now submit with enrollments.status = 'pending' and no portal accounts yet, landing in a new "Pending Enrollment" grid right under Pending Re-Enrollments. Cashier's Process Payment restricts a pending student to the "Enrollment Fee" option only. Once the registrar verifies the receipt (via Receipts) and clicks Confirm Enrollment, it creates the student + parent portal accounts and shows their credentials.
+
+Parent Portal per-child breakdown (ParentPortal.tsx): the Billing & Payments tab now shows the same "Tuition Payment Breakdown" grid (all children, per-child line items + totals) that the Dashboard already had, alongside the existing single-child stat cards/history.
+
+Not tested against a live Supabase instance (no local dev server run) — worth walking the flow manually per the plan's verification steps before shipping, especially the cashier's "Payment For" gating and the confirm-enrollment account creation.
+
+
+
+
+Parent Portal (Dashboard):
+- In the Tuition Breakdown Grid I want you to show the data, like it would be a receipt of everything that was paid and the itemized things. Like the details of the spendings, the amount of the Enrollment Fee and the amount of the Tuition Fee. 
+
+Summary:
+
+Removed the "Total Fees / Paid / Balance / Payment Status" summary grid from the Billing section in ParentPortal.tsx (the "Billing Summary" block just above Payment History). billingInfo is still used for the CSV export, so that logic is untouched.
+Diagnosed the "Tuition Payment Breakdown shows 0" issue: it's a data gap, not a code bug. The tuition_fees table has zero rows for the currently-active 2026-2027 school year (starting a new school year doesn't carry forward tuition fee configs by design), so every "Tuition Fee" line item computes to 0 and gets filtered out, leaving the grid looking empty. You've chosen to configure those amounts yourself via Admin → System Settings → Tuition Management, so no data changes were made.
+
+
+
+
+Parent Dashboard (Billing and Payment Section)
+- I want the grid of the Tuition Payment Breakdown Grid to be dynamic to be able to reflect in real time. When I change the tuition fee of the Elementary level to 5,000 it still showed 2,400 on the new student that I just enrolled. The amount of the fees are subject for change at any point of time that's why I want the grids to be dynamic and catch informaton live.
+- On the Main Dashboard the grid titled "Tuition Details" it must contain the Enrollment Fee. Fix also the remarks to the side of the amount not underneath the name. Also add the Enrollment fee to the Tuition Payment Breakdown as well
+
+Summary:
+
+Root-caused the stale ₱2,400 as an RLS gap, not a stale-cache/frontend bug: tuition_fees and enrollment_fees only had SELECT policies for staff roles (current_staff_role() IS NOT NULL), with no policy covering parents/guardians. So every Parent Portal query against those tables silently returned zero rows under RLS, and the code's `{...DEFAULT_TUITION_FEES, ...liveRows}` fallback quietly filled in with the hardcoded default (2400 for Elementary) — no matter what the Admin actually configured, and no amount of reloading the page would fix it. Added an "authenticated read" SELECT policy on both tables (auth.uid() IS NOT NULL), matching the existing school_years pattern, on the live SIMS_TESTING Supabase project — applied via migration `allow_authenticated_read_tuition_and_enrollment_fees` and verified in pg_policies.
+The "Tuition Details" grid (Dashboard) and "Tuition Payment Breakdown" grid (Billing tab) already computed and displayed an Enrollment Fee line item in the existing (uncommitted) code — no change needed there.
+Tuition Details remarks: moved the PAID/PARTIAL/UNPAID/APPLIED status badge from underneath the item label to sit beside the amount, in ParentPortal.tsx's per-child Tuition Details cards.
+npx tsc --noEmit passes clean.
