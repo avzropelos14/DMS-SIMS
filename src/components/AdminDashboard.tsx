@@ -473,7 +473,7 @@ async function createStaffAccount(
     employeeId: string,
     role: StaffAppRole,
     email?: string,
-): Promise<{ email: string; password: string }> {
+): Promise<{ email: string; password: string | null; emailSent?: boolean }> {
     const { data, error } = await supabase.functions.invoke(
         "create-staff-account",
         {
@@ -481,14 +481,7 @@ async function createStaffAccount(
         },
     );
     if (error) throw new Error(await functionErrorMessage(error));
-    return data as { email: string; password: string };
-}
-
-// Builds the standard staff login address: first initial + role + school domain,
-// e.g. "j.teacher@missionschool.edu.ph" for a teacher whose first name is Juan.
-function buildStaffEmail(firstName: string, role: StaffAppRole): string {
-    const initial = firstName.trim().charAt(0).toLowerCase();
-    return `${initial}.${role}@missionschool.edu.ph`;
+    return data as { email: string; password: string | null; emailSent?: boolean };
 }
 
 // Full-admin-only: removes the Supabase Auth login tied to a student, employee, or
@@ -509,6 +502,38 @@ async function deleteAuthAccountFor(
     );
     if (error) throw new Error(await functionErrorMessage(error));
     return data as { deleted: boolean };
+}
+
+// Keeps a student's `enrollments` row for a given school year in sync with a grade/section
+// change made outside the enrollment flow (e.g. Class Management's "Assign Student", or a
+// Student Management edit). `students.grade_level/section` is a mutable pointer, but rosters
+// (Student Management's list, Teacher Dashboard's My Classes) read from `enrollments`, which is
+// per-year and never auto-updated — without this, a reassigned student keeps showing up under
+// their old class there even though `students` reflects the new one.
+async function syncEnrollmentGradeSection(
+    studentId: string,
+    schoolYearId: string,
+    gradeLevel: string,
+    section: string | null,
+): Promise<void> {
+    const { data, error } = await supabase
+        .from("enrollments")
+        .update({ grade_level: gradeLevel, section })
+        .eq("student_id", studentId)
+        .eq("school_year_id", schoolYearId)
+        .select("student_id");
+    if (error) throw error;
+    if (!data || data.length === 0) {
+        const { error: insertError } = await supabase.from("enrollments").insert({
+            student_id: studentId,
+            school_year_id: schoolYearId,
+            grade_level: gradeLevel,
+            section,
+            status: "confirmed",
+            enrollment_type: "Continuing Student",
+        });
+        if (insertError) throw insertError;
+    }
 }
 
 async function generateStudentId(lastName: string): Promise<string> {
@@ -3095,14 +3120,13 @@ function StudentManagement({
     }, [schoolYear]);
 
     const sectionOptionsForGrade = (grade: string) => {
-        const opts = Array.from(
+        return Array.from(
             new Set(
                 sectionCatalog
                     .filter((c) => c.grade === grade)
                     .map((c) => c.section),
             ),
         ).sort();
-        return opts.length > 0 ? opts : ["Section A", "Section B", "Section C"];
     };
 
     const tabConfig: Record<
@@ -3690,17 +3714,38 @@ function StudentManagement({
                                 middle_name: form.middleName.trim() || null,
                                 last_name: form.lastName.trim(),
                                 suffix: form.suffix || null,
-                                email: form.email || null,
+                                email: isRegistrar
+                                    ? selectedStudent.email || null
+                                    : form.email || null,
                                 phone: form.phone || null,
                                 grade_level: form.grade,
-                                section: form.section,
+                                section: form.section || null,
                             })
                             .eq("id", selectedStudent.id);
-                        setSavingEdit(false);
                         if (error) {
+                            setSavingEdit(false);
                             setEditError(error.message);
                             return;
                         }
+                        try {
+                            const sy = await getSchoolYearByLabel(schoolYear);
+                            if (sy) {
+                                await syncEnrollmentGradeSection(
+                                    selectedStudent.id,
+                                    sy.id,
+                                    form.grade,
+                                    form.section || null,
+                                );
+                            }
+                        } catch (e: any) {
+                            setSavingEdit(false);
+                            setEditError(
+                                e?.message ||
+                                    "Failed to update the student's class roster.",
+                            );
+                            return;
+                        }
+                        setSavingEdit(false);
                         const name =
                             [
                                 form.firstName.trim(),
@@ -3979,7 +4024,13 @@ function StudentEditModal({
                                         email: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                                disabled={isRegistrar}
+                                title={
+                                    isRegistrar
+                                        ? "Only an Administrator can change a student's email"
+                                        : undefined
+                                }
+                                className={`w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black ${isRegistrar ? "bg-gray-50 text-gray-400 cursor-not-allowed" : ""}`}
                             />
                         </div>
                         <div>
@@ -4011,7 +4062,7 @@ function StudentEditModal({
                                         section:
                                             sectionOptionsForGrade(
                                                 e.target.value,
-                                            )[0] || f.section,
+                                            )[0] || "",
                                     }))
                                 }
                                 className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
@@ -4025,20 +4076,28 @@ function StudentEditModal({
                             <label className="block text-sm font-medium text-[#6b6456] mb-1">
                                 Section
                             </label>
-                            <select
-                                value={form.section}
-                                onChange={(e) =>
-                                    setForm((f) => ({
-                                        ...f,
-                                        section: e.target.value,
-                                    }))
-                                }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                            >
-                                {sectionOptions.map((s) => (
-                                    <option key={s}>{s}</option>
-                                ))}
-                            </select>
+                            {sectionOptions.length > 0 ? (
+                                <select
+                                    value={form.section}
+                                    onChange={(e) =>
+                                        setForm((f) => ({
+                                            ...f,
+                                            section: e.target.value,
+                                        }))
+                                    }
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                                >
+                                    {sectionOptions.map((s) => (
+                                        <option key={s}>{s}</option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <input
+                                    value="None"
+                                    disabled
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 text-black"
+                                />
+                            )}
                         </div>
                     </div>
 
@@ -4812,6 +4871,14 @@ function ClassManagementSection({
                 })
                 .eq("id", student.id);
             if (error) throw error;
+            if (schoolYearId) {
+                await syncEnrollmentGradeSection(
+                    student.id,
+                    schoolYearId,
+                    assignTargetClass.grade,
+                    assignTargetClass.section,
+                );
+            }
             // Move the student into the roster for this grade/section — this may be a move
             // from a different class (assigned at enrollment or previously), not just from
             // the unassigned pool, so drop any prior roster entry for them first.
@@ -6097,6 +6164,7 @@ function StaffManagement({
         suffix: string;
         position: "" | (typeof ADD_POSITIONS)[number];
         subject: string;
+        email: string;
         phone: string;
         education: string;
         dateHired: string;
@@ -6110,6 +6178,7 @@ function StaffManagement({
         suffix: "",
         position: "",
         subject: TEACHER_SUBJECTS[0],
+        email: "",
         phone: "",
         education: "",
         dateHired: "",
@@ -6134,6 +6203,7 @@ function StaffManagement({
         name: string;
         email: string;
         password: string | null;
+        emailSent?: boolean;
     } | null>(null);
 
     const statusConfig: Record<
@@ -6271,6 +6341,10 @@ function StaffManagement({
             setAddEmployeeError("Please select a subject.");
             return;
         }
+        if (!newEmployee.email.trim()) {
+            setAddEmployeeError("Please enter an email address.");
+            return;
+        }
         setAddingEmployee(true);
         setAddEmployeeError(null);
         const fullName = composeEmployeeName(newEmployee);
@@ -6282,6 +6356,7 @@ function StaffManagement({
                 fullName,
                 position: newEmployee.position,
                 departmentName,
+                email: newEmployee.email.trim(),
                 phone: newEmployee.phone,
                 education: newEmployee.education || null,
                 employmentType: newEmployee.employmentType || null,
@@ -6293,7 +6368,7 @@ function StaffManagement({
             const credentials = await createStaffAccount(
                 inserted.id,
                 role,
-                buildStaffEmail(newEmployee.firstName, role),
+                newEmployee.email.trim(),
             );
             setEmployees((prev) => [
                 ...prev,
@@ -6318,6 +6393,7 @@ function StaffManagement({
                 suffix: "",
                 position: "",
                 subject: TEACHER_SUBJECTS[0],
+                email: "",
                 phone: "",
                 education: "",
                 dateHired: "",
@@ -6330,6 +6406,7 @@ function StaffManagement({
                 name: fullName,
                 email: credentials.email,
                 password: credentials.password,
+                emailSent: credentials.emailSent ?? false,
             });
         } catch (e: any) {
             // supabase.functions.invoke can throw on a client-side network/timeout error even
@@ -6365,6 +6442,7 @@ function StaffManagement({
                         suffix: "",
                         position: "",
                         subject: TEACHER_SUBJECTS[0],
+                        email: "",
                         phone: "",
                         education: "",
                         dateHired: "",
@@ -6377,6 +6455,7 @@ function StaffManagement({
                         name: fullName,
                         email: profile.email,
                         password: null,
+                        emailSent: true,
                     });
                     setAddingEmployee(false);
                     return;
@@ -6659,6 +6738,22 @@ function StaffManagement({
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                        Last Name
+                                    </label>
+                                    <input
+                                        value={newEmployee.lastName}
+                                        onChange={(e) =>
+                                            setNewEmployee((f) => ({
+                                                ...f,
+                                                lastName: e.target.value,
+                                            }))
+                                        }
+                                        placeholder="e.g. Dela Cruz"
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
                                         First Name
                                     </label>
                                     <input
@@ -6689,22 +6784,6 @@ function StaffManagement({
                                             }))
                                         }
                                         placeholder="e.g. Reyes"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Last Name
-                                    </label>
-                                    <input
-                                        value={newEmployee.lastName}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                lastName: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. Dela Cruz"
                                         className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
                                     />
                                 </div>
@@ -6777,6 +6856,23 @@ function StaffManagement({
                                         </select>
                                     </div>
                                 )}
+                                <div className="col-span-2">
+                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                        Email Address
+                                    </label>
+                                    <input
+                                        type="email"
+                                        value={newEmployee.email}
+                                        onChange={(e) =>
+                                            setNewEmployee((f) => ({
+                                                ...f,
+                                                email: e.target.value,
+                                            }))
+                                        }
+                                        placeholder="e.g. juana.delacruz@missionschool.edu.ph"
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                    />
+                                </div>
                                 <div>
                                     <label className="block text-sm font-medium text-[#6b6456] mb-1">
                                         Phone
@@ -6917,25 +7013,28 @@ function StaffManagement({
                             Employee Added
                         </h2>
                         <p className="text-sm text-[#6b6456]">
-                            {newEmployeeCredentials.name} can now log in to the
-                            system with:
+                            {newEmployeeCredentials.emailSent
+                                ? `An activation email was sent to ${newEmployeeCredentials.name} at:`
+                                : `${newEmployeeCredentials.name} can now log in to the system with:`}
                         </p>
                         <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1 text-sm">
                             <p>
                                 <strong>Email:</strong>{" "}
                                 {newEmployeeCredentials.email}
                             </p>
-                            {newEmployeeCredentials.password ? (
-                                <p>
-                                    <strong>Password:</strong>{" "}
-                                    {newEmployeeCredentials.password}
-                                </p>
-                            ) : (
-                                <p className="text-[#8b8476]">
-                                    We couldn't confirm the generated password —
-                                    use Reset Password to set one before sharing
-                                    login details.
-                                </p>
+                            {!newEmployeeCredentials.emailSent && (
+                                newEmployeeCredentials.password ? (
+                                    <p>
+                                        <strong>Password:</strong>{" "}
+                                        {newEmployeeCredentials.password}
+                                    </p>
+                                ) : (
+                                    <p className="text-[#8b8476]">
+                                        We couldn't confirm the generated
+                                        password — use Reset Password to set
+                                        one before sharing login details.
+                                    </p>
+                                )
                             )}
                         </div>
                         <button
@@ -7027,27 +7126,21 @@ function EmployeeEditModal({
                         <Edit className="w-5 h-5" />
                         <h2 className="text-lg font-semibold">Edit Employee</h2>
                     </div>
-                    <button
-                        onClick={onCancel}
-                        className="p-1 hover:bg-white/20 rounded-lg"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
                 </div>
                 <div className="p-6 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Employee ID
                             </label>
                             <input
                                 value={form.id}
                                 disabled
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-black"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Full Name
                             </label>
                             <input
@@ -7058,11 +7151,11 @@ function EmployeeEditModal({
                                         name: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Position
                             </label>
                             <input
@@ -7073,11 +7166,11 @@ function EmployeeEditModal({
                                         position: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Department
                             </label>
                             <select
@@ -7088,7 +7181,7 @@ function EmployeeEditModal({
                                         department: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             >
                                 {departments.map((d) => (
                                     <option key={d}>{d}</option>
@@ -7096,7 +7189,7 @@ function EmployeeEditModal({
                             </select>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Email
                             </label>
                             <input
@@ -7107,11 +7200,11 @@ function EmployeeEditModal({
                                         email: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Phone
                             </label>
                             <input
@@ -7122,11 +7215,11 @@ function EmployeeEditModal({
                                         phone: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 License No.
                             </label>
                             <input
@@ -7137,11 +7230,11 @@ function EmployeeEditModal({
                                         licenseNo: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Education
                             </label>
                             <input
@@ -7152,11 +7245,11 @@ function EmployeeEditModal({
                                         education: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                         <div className="md:col-span-2">
-                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            <label className="block text-sm font-medium text-black mb-1">
                                 Address
                             </label>
                             <input
@@ -7167,14 +7260,14 @@ function EmployeeEditModal({
                                         address: e.target.value,
                                     }))
                                 }
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961]"
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
                             />
                         </div>
                     </div>
                     <div className="flex gap-3 pt-4 border-t border-gray-200">
                         <button
                             onClick={onCancel}
-                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-black font-medium hover:bg-[#faf8f5] transition-all"
                         >
                             Cancel
                         </button>
@@ -8287,11 +8380,33 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                                                 null,
                                         })
                                         .eq("id", editingStudent.id);
-                                    setSavingEdit(false);
                                     if (error) {
+                                        setSavingEdit(false);
                                         setEditSaveError(error.message);
                                         return;
                                     }
+                                    try {
+                                        const sy =
+                                            await getSchoolYearByLabel(
+                                                schoolYear,
+                                            );
+                                        if (sy) {
+                                            await syncEnrollmentGradeSection(
+                                                editingStudent.id,
+                                                sy.id,
+                                                editingStudent.grade,
+                                                editingStudent.section,
+                                            );
+                                        }
+                                    } catch (e: any) {
+                                        setSavingEdit(false);
+                                        setEditSaveError(
+                                            e?.message ||
+                                                "Failed to update the student's class roster.",
+                                        );
+                                        return;
+                                    }
+                                    setSavingEdit(false);
                                     const dobLabel = editingStudent.dobRaw
                                         ? formatDate(editingStudent.dobRaw)
                                         : editingStudent.dob;
