@@ -714,13 +714,16 @@ function MyClasses({ user, schoolYear }: any) {
     });
   };
 
-  const handlePrintReport = () => {
-    window.print();
-  };
-
   // Pass/fail remarks derived from the final grade, mirrored across the
   // grades table and both report modals
   const getRemarks = (final: number | null) => (final === null || final === undefined ? '—' : final >= 75 ? 'Passed' : 'Failed');
+
+  // General average across a set of subjects, used at the bottom-right of
+  // every grade report table (screen, PDF and print)
+  const getGeneralAverage = (subjects: any[]) => {
+    const finals = subjects.map((s) => s.final).filter((f): f is number => f !== null && f !== undefined);
+    return finals.length > 0 ? finals.reduce((a, b) => a + b, 0) / finals.length : null;
+  };
 
   // Remarks filter — narrows the roster to students who have passed, failed, or have no
   // final grade yet, alongside the existing name/ID search box.
@@ -748,28 +751,35 @@ function MyClasses({ user, schoolYear }: any) {
     );
   });
 
-  const handleDownloadCurrentReportPDF = () => {
-    if (!selectedStudent) return;
+  // Left/right margins used for the report layout — derived from each page's
+  // actual size so the template lays out correctly on any paper (A4, Letter, etc.)
+  const REPORT_MARGIN = 14;
+
+  const buildCurrentReportDoc = () => {
+    if (!selectedStudent || !currentReportData) return null;
     const currentData = currentReportData;
-    if (!currentData) return;
 
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const centerX = pageWidth / 2;
+    const rightMargin = pageWidth - REPORT_MARGIN;
 
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('DUMAGUETE MISSION SCHOOL', 105, 18, { align: 'center' });
+    doc.text('DUMAGUETE MISSION SCHOOL', centerX, 18, { align: 'center' });
 
     doc.setFontSize(13);
-    doc.text('CURRENT YEAR GRADE REPORT', 105, 27, { align: 'center' });
+    doc.text('CURRENT YEAR GRADE REPORT', centerX, 27, { align: 'center' });
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Student: ${selectedStudent.student}`, 14, 40);
-    doc.text(`Student ID: ${selectedStudent.studentId}`, 14, 47);
-    doc.text(`${currentData.year} - ${currentData.grade}`, 14, 54);
+    doc.text(`Student: ${selectedStudent.student}`, REPORT_MARGIN, 40);
+    doc.text(`Student ID: ${selectedStudent.studentId}`, REPORT_MARGIN, 47);
+    doc.text(`${currentData.year} - ${currentData.grade}`, REPORT_MARGIN, 54);
 
     autoTable(doc, {
       startY: 62,
+      margin: { left: REPORT_MARGIN, right: REPORT_MARGIN },
       head: [['Subject', 'Teacher', 'Q1', 'Q2', 'Q3', 'Q4', 'Final', 'Remarks']],
       body: currentData.subjects.map((subject: any) => [
         subject.subject,
@@ -783,36 +793,58 @@ function MyClasses({ user, schoolYear }: any) {
       ])
     });
 
-    doc.save(`${selectedStudent.student.replace(/\s+/g, '_')}_Current_Report.pdf`);
+    const generalAverage = getGeneralAverage(currentData.subjects);
+    const afterTableY = (doc as any).lastAutoTable.finalY + 8;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(
+      `General Average: ${generalAverage !== null ? generalAverage.toFixed(2) : '—'}`,
+      rightMargin,
+      afterTableY,
+      { align: 'right' }
+    );
+
+    return doc;
   };
 
-  const handleDownloadHistoricalReportPDF = () => {
-    if (!selectedStudent) return;
+  const buildHistoricalReportDoc = () => {
+    if (!selectedStudent || !historicalReportData.length) return null;
     const historicalData = historicalReportData;
-    if (!historicalData.length) return;
 
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const centerX = pageWidth / 2;
+    const rightMargin = pageWidth - REPORT_MARGIN;
 
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('DUMAGUETE MISSION SCHOOL', 105, 18, { align: 'center' });
+    doc.text('DUMAGUETE MISSION SCHOOL', centerX, 18, { align: 'center' });
 
     doc.setFontSize(13);
-    doc.text('HISTORICAL GRADE REPORT', 105, 27, { align: 'center' });
+    doc.text('HISTORICAL GRADE REPORT', centerX, 27, { align: 'center' });
 
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Student: ${selectedStudent.student}`, 14, 40);
-    doc.text(`Student ID: ${selectedStudent.studentId}`, 14, 47);
+    doc.text(`Student: ${selectedStudent.student}`, REPORT_MARGIN, 40);
+    doc.text(`Student ID: ${selectedStudent.studentId}`, REPORT_MARGIN, 47);
 
     let startY = 55;
     historicalData.forEach((yearData: any) => {
+      // Start a fresh page if the next year's block won't fit on this one,
+      // so the layout stays correct regardless of the page's height
+      if (startY > pageHeight - 60) {
+        doc.addPage();
+        startY = REPORT_MARGIN;
+      }
+
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(11);
-      doc.text(`${yearData.year} - ${yearData.grade}`, 14, startY);
+      doc.text(`${yearData.year} - ${yearData.grade}`, REPORT_MARGIN, startY);
 
       autoTable(doc, {
         startY: startY + 4,
+        margin: { left: REPORT_MARGIN, right: REPORT_MARGIN },
         head: [['Subject', 'Q1', 'Q2', 'Q3', 'Q4', 'Final', 'Remarks']],
         body: yearData.subjects.map((subject: any) => [
           subject.subject,
@@ -825,10 +857,43 @@ function MyClasses({ user, schoolYear }: any) {
         ])
       });
 
-      startY = (doc as any).lastAutoTable.finalY + 12;
+      const generalAverage = getGeneralAverage(yearData.subjects);
+      const afterTableY = (doc as any).lastAutoTable.finalY + 6;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(
+        `General Average: ${generalAverage !== null ? generalAverage.toFixed(2) : '—'}`,
+        rightMargin,
+        afterTableY,
+        { align: 'right' }
+      );
+
+      startY = afterTableY + 10;
     });
 
+    return doc;
+  };
+
+  const handleDownloadCurrentReportPDF = () => {
+    const doc = buildCurrentReportDoc();
+    if (!doc || !selectedStudent) return;
+    doc.save(`${selectedStudent.student.replace(/\s+/g, '_')}_Current_Report.pdf`);
+  };
+
+  const handleDownloadHistoricalReportPDF = () => {
+    const doc = buildHistoricalReportDoc();
+    if (!doc || !selectedStudent) return;
     doc.save(`${selectedStudent.student.replace(/\s+/g, '_')}_Historical_Report.pdf`);
+  };
+
+  // Printing renders the same PDF template used for downloads (instead of
+  // window.print(), which printed a blank page because the report is shown
+  // in a fixed-position modal with no print stylesheet)
+  const handlePrintReport = () => {
+    const doc = showHistoricalReport ? buildHistoricalReportDoc() : buildCurrentReportDoc();
+    if (!doc) return;
+    doc.autoPrint();
+    window.open(doc.output('bloburl') as unknown as string, '_blank');
   };
 
   // If a class is selected, show the detailed view with grades
@@ -1150,7 +1215,7 @@ function MyClasses({ user, schoolYear }: any) {
                   </button>
                   <button 
                     onClick={handleDownloadHistoricalReportPDF}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
+                    className="flex items-center gap-2 px-4 py-2 bg-[#7d1935] text-white rounded-lg transition-all"
                   >
                     <Download className="w-4 h-4" />
                     Download PDF
@@ -1215,6 +1280,14 @@ function MyClasses({ user, schoolYear }: any) {
                         </tbody>
                       </table>
                     </div>
+                    <div className="flex justify-end px-4 py-3 bg-[#faf8f5] border-t border-gray-200">
+                      <p className="text-sm font-semibold text-[#1a2b4a]">
+                        General Average: {(() => {
+                          const avg = getGeneralAverage(yearData.subjects);
+                          return avg !== null ? avg.toFixed(2) : '—';
+                        })()}
+                      </p>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1241,7 +1314,7 @@ function MyClasses({ user, schoolYear }: any) {
                   </button>
                   <button 
                     onClick={handleDownloadCurrentReportPDF}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all"
+                    className="flex items-center gap-2 px-4 py-2 bg-[#7d1935] text-white rounded-lg transition-all"
                   >
                     <Download className="w-4 h-4" />
                     Download PDF

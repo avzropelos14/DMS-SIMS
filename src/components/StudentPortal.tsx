@@ -50,6 +50,8 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
   const [subjectGrades, setSubjectGrades] = useState<SubjectGrade[]>([]);
 
   const studentId = user?.studentId ?? user?.id ?? null;
+  const gradeLevel = user?.grade ?? user?.student?.grade_level ?? null;
+  const section = user?.student?.section ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +62,7 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
   }, []);
 
   useEffect(() => {
-    if (!studentId || !schoolYear) return;
+    if (!studentId || !schoolYear || !gradeLevel || !section) return;
     let cancelled = false;
 
     (async () => {
@@ -74,35 +76,51 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
         return;
       }
 
-      const { data, error } = await supabase
+      // Every subject assigned to the student's grade/section is listed, whether
+      // or not the teacher has entered a grade yet — grades are left-joined in
+      // below rather than driving which subjects show up.
+      const { data: cssRows, error: cssError } = await supabase
+        .from('class_section_subjects')
+        .select('id, subjects(name), employees(full_name), class_sections!inner(grade_level, section_name, school_year_id)')
+        .eq('class_sections.grade_level', gradeLevel)
+        .eq('class_sections.section_name', section)
+        .eq('class_sections.school_year_id', sy.id)
+        .eq('archived', false);
+
+      if (cancelled) return;
+      if (cssError) {
+        console.error('Failed to load class subjects', cssError);
+        return;
+      }
+
+      const { data: gradeRows, error: gradeError } = await supabase
         .from('grades')
-        .select(`
-          id, q1, q2, q3, q4, final_grade,
-          class_section_subjects (
-            subjects ( name ),
-            employees ( full_name )
-          )
-        `)
+        .select('class_section_subject_id, q1, q2, q3, q4, final_grade')
         .eq('student_id', studentId)
         .eq('school_year_id', sy.id);
 
       if (cancelled) return;
-      if (error) {
-        console.error('Failed to load grades', error);
+      if (gradeError) {
+        console.error('Failed to load grades', gradeError);
         return;
       }
 
-      const mapped: SubjectGrade[] = (data ?? [])
-        .map((row: any, index: number) => ({
-          subject: row.class_section_subjects?.subjects?.name ?? row.class_section_subjects?.[0]?.subjects?.[0]?.name ?? 'Subject',
-          teacher: row.class_section_subjects?.employees?.full_name ?? row.class_section_subjects?.[0]?.employees?.[0]?.full_name ?? 'To Be Assigned',
-          q1: row.q1 != null ? Number(row.q1) : null,
-          q2: row.q2 != null ? Number(row.q2) : null,
-          q3: row.q3 != null ? Number(row.q3) : null,
-          q4: row.q4 != null ? Number(row.q4) : null,
-          final: row.final_grade != null ? Number(row.final_grade) : null,
-          color: SUBJECT_COLORS[index % SUBJECT_COLORS.length]
-        }))
+      const gradesByCss = new Map((gradeRows ?? []).map((g: any) => [g.class_section_subject_id, g]));
+
+      const mapped: SubjectGrade[] = (cssRows ?? [])
+        .map((row: any, index: number) => {
+          const g = gradesByCss.get(row.id);
+          return {
+            subject: row.subjects?.name ?? 'Subject',
+            teacher: row.employees?.full_name ?? 'To Be Assigned',
+            q1: g?.q1 != null ? Number(g.q1) : null,
+            q2: g?.q2 != null ? Number(g.q2) : null,
+            q3: g?.q3 != null ? Number(g.q3) : null,
+            q4: g?.q4 != null ? Number(g.q4) : null,
+            final: g?.final_grade != null ? Number(g.final_grade) : null,
+            color: SUBJECT_COLORS[index % SUBJECT_COLORS.length]
+          };
+        })
         .sort((a, b) => a.subject.localeCompare(b.subject));
 
       setSubjectGrades(mapped);
@@ -111,7 +129,7 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
     return () => {
       cancelled = true;
     };
-  }, [studentId, schoolYear]);
+  }, [studentId, schoolYear, gradeLevel, section]);
 
   const overallGPA = computeOverallGPA(subjectGrades.filter((g) => g.final != null));
 

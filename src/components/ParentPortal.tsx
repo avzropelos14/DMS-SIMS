@@ -728,42 +728,60 @@ function AcademicProgress({ schoolYear, children, selectedChild, setSelectedChil
         return;
       }
 
-      const { data, error } = await supabase
-        .from('grades')
-        .select(`
-          q1, q2, q3, q4, final_grade,
-          class_section_subjects (
-            subjects ( name ),
-            employees ( full_name )
-          )
-        `)
-        .eq('student_id', childInfo.id)
-        .eq('school_year_id', sy.id);
+      // Every subject assigned to the child's grade/section is listed, whether
+      // or not the teacher has entered a grade yet — grades are left-joined in
+      // below rather than driving which subjects show up.
+      const { data: cssRows, error: cssError } = await supabase
+        .from('class_section_subjects')
+        .select('id, subjects(name), employees(full_name), class_sections!inner(grade_level, section_name, school_year_id)')
+        .eq('class_sections.grade_level', childInfo.gradeLevel)
+        .eq('class_sections.section_name', childInfo.section)
+        .eq('class_sections.school_year_id', sy.id)
+        .eq('archived', false);
 
       if (cancelled) return;
-      if (error) {
-        console.error('Failed to load grades', error);
+      if (cssError) {
+        console.error('Failed to load class subjects', cssError);
         setDetailedGrades([]);
         setLoadingGrades(false);
         return;
       }
 
-      const mapped = (data ?? []).map((row: any) => ({
-        subject: row.class_section_subjects?.subjects?.name ?? row.class_section_subjects?.[0]?.subjects?.[0]?.name ?? 'Subject',
-        teacher: row.class_section_subjects?.employees?.full_name ?? row.class_section_subjects?.[0]?.employees?.[0]?.full_name ?? 'To Be Assigned',
-        q1: row.q1 != null ? Number(row.q1) : null,
-        q2: row.q2 != null ? Number(row.q2) : null,
-        q3: row.q3 != null ? Number(row.q3) : null,
-        q4: row.q4 != null ? Number(row.q4) : null,
-        final: row.final_grade != null ? Number(row.final_grade) : null,
-      })).sort((a: any, b: any) => a.subject.localeCompare(b.subject));
+      const { data: gradeRows, error: gradeError } = await supabase
+        .from('grades')
+        .select('class_section_subject_id, q1, q2, q3, q4, final_grade')
+        .eq('student_id', childInfo.id)
+        .eq('school_year_id', sy.id);
+
+      if (cancelled) return;
+      if (gradeError) {
+        console.error('Failed to load grades', gradeError);
+        setDetailedGrades([]);
+        setLoadingGrades(false);
+        return;
+      }
+
+      const gradesByCss = new Map((gradeRows ?? []).map((g: any) => [g.class_section_subject_id, g]));
+
+      const mapped = (cssRows ?? []).map((row: any) => {
+        const g = gradesByCss.get(row.id);
+        return {
+          subject: row.subjects?.name ?? 'Subject',
+          teacher: row.employees?.full_name ?? 'To Be Assigned',
+          q1: g?.q1 != null ? Number(g.q1) : null,
+          q2: g?.q2 != null ? Number(g.q2) : null,
+          q3: g?.q3 != null ? Number(g.q3) : null,
+          q4: g?.q4 != null ? Number(g.q4) : null,
+          final: g?.final_grade != null ? Number(g.final_grade) : null,
+        };
+      }).sort((a: any, b: any) => a.subject.localeCompare(b.subject));
 
       setDetailedGrades(mapped);
       setLoadingGrades(false);
     })();
 
     return () => { cancelled = true; };
-  }, [childInfo?.id, schoolYear]);
+  }, [childInfo?.id, childInfo?.gradeLevel, childInfo?.section, schoolYear]);
 
   const finals = detailedGrades.map((g) => g.final).filter((f): f is number => f != null);
   const currentGPA = finals.length ? (finals.reduce((sum, f) => sum + f, 0) / finals.length).toFixed(1) : '—';
