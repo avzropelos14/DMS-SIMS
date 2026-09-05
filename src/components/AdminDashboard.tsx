@@ -474,10 +474,20 @@ async function createStaffAccount(
     role: StaffAppRole,
     email?: string,
 ): Promise<{ email: string; password: string | null; emailSent?: boolean }> {
+    // See createStudentAccount above — pass the caller's access token explicitly so the
+    // gateway doesn't reject the request with UNAUTHORIZED_NO_AUTH_HEADER.
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) {
+        throw new Error(
+            "Your session has expired — please log in again before adding this employee.",
+        );
+    }
     const { data, error } = await supabase.functions.invoke(
         "create-staff-account",
         {
             body: { employee_id: employeeId, role, email },
+            headers: { Authorization: `Bearer ${accessToken}` },
         },
     );
     if (error) throw new Error(await functionErrorMessage(error));
