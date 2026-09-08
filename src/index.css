@@ -70,9 +70,6 @@ h2 {
     font-family: var(--heading);
 }
 
-h1 {
-    letter-spacing: -1.25px;
-}
 h2 {
     line-height: 118%;
     letter-spacing: -0.24px;

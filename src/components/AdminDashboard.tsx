@@ -1599,7 +1599,8 @@ function OverviewSection({
                 supabase
                     .from("employees")
                     .select("id", { count: "exact", head: true })
-                    .eq("status", "active"),
+                    .eq("status", "active")
+                    .is("deleted_at", null),
                 supabase
                     .from("activity_log")
                     .select("id, activity_type, message, created_at")
@@ -4318,6 +4319,7 @@ function ClassManagementSection({
                     .select("id, full_name")
                     .eq("status", "active")
                     .eq("position", "Teacher")
+                    .is("deleted_at", null)
                     .order("full_name"),
                 syId
                     ? supabase
@@ -6132,6 +6134,7 @@ function StaffManagement({
                     .select(
                         "id, full_name, position, email, phone, education, date_hired, status, address, license_no, notes, departments(name)",
                     )
+                    .is("deleted_at", null)
                     .order("full_name"),
                 supabase.from("departments").select("name").order("name"),
             ]);
@@ -6293,9 +6296,14 @@ function StaffManagement({
                 return;
             }
         }
+        // Soft-delete: employees are referenced by historical records (payments,
+        // pickup logs, class section advisers, etc.), so a hard delete would either
+        // fail on those foreign keys or erase the name from past school years.
+        // Marking deleted_at instead keeps history intact while hiding the staff
+        // member from active lists going forward.
         const { error } = await supabase
             .from("employees")
-            .delete()
+            .update({ deleted_at: new Date().toISOString(), status: "inactive" })
             .eq("id", selectedEmployee.id);
         if (error) {
             setDeleteError(error.message);
@@ -11306,6 +11314,7 @@ function AcademicsSection({
                 .select("id, full_name, departments(name)")
                 .eq("status", "active")
                 .eq("position", "Teacher")
+                .is("deleted_at", null)
                 .order("full_name"),
             supabase
                 .from("class_section_subjects")

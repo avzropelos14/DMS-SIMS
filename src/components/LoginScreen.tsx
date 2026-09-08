@@ -5,6 +5,9 @@ import schoolLogo from "./assets/dmgteLogo.jpg";
 import { supabase } from './../supabase';
 import { resolveIdentity } from '../lib/resolveRole';
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
+import { sendMfaCode } from '../lib/mfa';
+import { MfaVerifyScreen } from './MfaVerifyScreen';
+import type { User } from '@supabase/supabase-js';
 
 interface LoginScreenProps {
     onLogin: (role: UserRole, userData: any, authUser?: { user_metadata?: Record<string, any> }) => void;
@@ -16,8 +19,13 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
     const [error, setError] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [rememberDevice, setRememberDevice] = useState(false);
     const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_SETTINGS.school_name);
     const [schoolMotto, setSchoolMotto] = useState(DEFAULT_SCHOOL_SETTINGS.school_motto);
+
+    const [mfaStep, setMfaStep] = useState(false);
+    const [pendingUser, setPendingUser] = useState<User | null>(null);
+    const [pendingIdentity, setPendingIdentity] = useState<Awaited<ReturnType<typeof resolveIdentity>>>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -55,13 +63,47 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 return;
             }
 
-            onLogin(identity.role, identity.userData, data.user);
+            const mfaResult = await sendMfaCode(data.user.id);
+            if (mfaResult.error) {
+                await supabase.auth.signOut();
+                setError(mfaResult.error);
+                return;
+            }
+
+            if (mfaResult.trusted) {
+                onLogin(identity.role, identity.userData, data.user);
+                return;
+            }
+
+            setPendingUser(data.user);
+            setPendingIdentity(identity);
+            setMfaStep(true);
         } catch {
             setError("Couldn't reach the server. Please try again.");
         } finally {
             setIsSubmitting(false);
         }
     };
+
+    const handleCancelMfa = async () => {
+        await supabase.auth.signOut();
+        setMfaStep(false);
+        setPendingUser(null);
+        setPendingIdentity(null);
+        setPassword("");
+    };
+
+    if (mfaStep && pendingUser && pendingIdentity) {
+        return (
+            <MfaVerifyScreen
+                userId={pendingUser.id}
+                userEmail={pendingUser.email}
+                rememberDevice={rememberDevice}
+                onCancel={handleCancelMfa}
+                onVerified={() => onLogin(pendingIdentity.role, pendingIdentity.userData, pendingUser)}
+            />
+        );
+    }
 
     return (
         <div
@@ -330,6 +372,19 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                                 <span>{isSubmitting ? "Signing In..." : "Sign In to Portal"}</span>
                                 <ArrowRight className="w-4 h-4" />
                             </button>
+
+                            {/* Remember this device */}
+                            <label className="flex items-center gap-2.5 justify-center pt-1 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={rememberDevice}
+                                    onChange={(e) => setRememberDevice(e.target.checked)}
+                                    className="w-4 h-4 rounded border-2 border-[#5c5c5b] accent-[#1a2b4a]"
+                                />
+                                <span className="text-xs text-[#6b6456]">
+                                    Remember this device for 30 days
+                                </span>
+                            </label>
                         </form>
 
                         {/* Security */}

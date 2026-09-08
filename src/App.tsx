@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LoginScreen } from './components/LoginScreen';
 import { SetPasswordScreen } from './components/SetPasswordScreen';
+import { MfaVerifyScreen } from './components/MfaVerifyScreen';
 import { AdminDashboard } from './components/AdminDashboard';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { StudentPortal } from './components/StudentPortal';
@@ -9,7 +10,9 @@ import { GuardPortal } from './components/GuardPortal';
 import { CashierPortal } from './components/CashierPortal';
 import { supabase } from './supabase';
 import { resolveIdentity } from './lib/resolveRole';
+import { sendMfaCode } from './lib/mfa';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES } from './lib/tuition';
+import type { User } from '@supabase/supabase-js';
 
 export type UserRole = 'admin' | 'registrar' | 'teacher' | 'student' | 'parent' | 'guard' | 'cashier' | null;
 
@@ -21,6 +24,7 @@ function App() {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [mfaPending, setMfaPending] = useState<{ user: User; identity: Awaited<ReturnType<typeof resolveIdentity>> } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,9 +59,17 @@ function App() {
       const identity = await resolveIdentity(user.id);
       if (cancelled) return;
       if (identity) {
-        setCurrentRole(identity.role);
-        setCurrentUser(identity.userData);
-        setNeedsPasswordSetup(user.user_metadata?.password_set === false);
+        // A persisted auth session alone doesn't prove this device passed MFA —
+        // re-check trust so a page refresh can't be used to skip the code step.
+        const mfaResult = await sendMfaCode(user.id);
+        if (cancelled) return;
+        if (mfaResult.trusted) {
+          setCurrentRole(identity.role);
+          setCurrentUser(identity.userData);
+          setNeedsPasswordSetup(user.user_metadata?.password_set === false);
+        } else {
+          setMfaPending({ user, identity });
+        }
       }
       setIsRestoringSession(false);
     };
@@ -72,6 +84,7 @@ function App() {
         setCurrentUser(null);
         setNeedsPasswordSetup(false);
         setPasswordRecoveryMode(false);
+        setMfaPending(null);
       } else if (event === 'PASSWORD_RECOVERY') {
         setPasswordRecoveryMode(true);
       }
@@ -141,10 +154,31 @@ function App() {
     setCurrentUser(null);
     setNeedsPasswordSetup(false);
     setPasswordRecoveryMode(false);
+    setMfaPending(null);
   };
 
   if (isRestoringSession) {
     return null;
+  }
+
+  if (mfaPending) {
+    return (
+      <MfaVerifyScreen
+        userId={mfaPending.user.id}
+        userEmail={mfaPending.user.email}
+        showOwnRememberCheckbox
+        onCancel={handleLogout}
+        onVerified={() => {
+          const { user, identity } = mfaPending;
+          setMfaPending(null);
+          if (identity) {
+            setCurrentRole(identity.role);
+            setCurrentUser(identity.userData);
+            setNeedsPasswordSetup(user.user_metadata?.password_set === false);
+          }
+        }}
+      />
+    );
   }
 
   if (passwordRecoveryMode) {
