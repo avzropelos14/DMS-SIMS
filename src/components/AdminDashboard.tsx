@@ -52,6 +52,7 @@ import {
     LayoutGrid,
     List,
     RotateCcw,
+    BookOpen,
 } from "lucide-react";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { supabase } from "./../supabase";
@@ -364,6 +365,28 @@ async function getCurrentSchoolYearId(): Promise<string | null> {
 const JUNIOR_HIGH_GRADES = ["Grade 7", "Grade 8", "Grade 9", "Grade 10"];
 function isJuniorHighGrade(grade: string): boolean {
     return JUNIOR_HIGH_GRADES.includes(grade);
+}
+
+// Converts a 24-hour "HH:MM" time into 12-hour "h:mm AM/PM" for display.
+function formatTime12hr(t: string): string {
+    if (!t) return "";
+    const [h, m] = t.split(":").map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return t;
+    const period = h >= 12 ? "PM" : "AM";
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `${hour12}:${m.toString().padStart(2, "0")} ${period}`;
+}
+
+// Converts a stored "HH:MM-HH:MM" schedules.time_label into a 12-hour range
+// (e.g. "08:00-09:00" -> "8:00 AM - 9:00 AM"); anything else is returned as-is.
+function formatTimeLabel12hr(timeLabel: string): string {
+    if (!timeLabel) return timeLabel;
+    const parts = timeLabel.split("-");
+    if (parts.length !== 2) return timeLabel;
+    const [start, end] = parts;
+    if (!/^\d{1,2}:\d{2}$/.test(start.trim()) || !/^\d{1,2}:\d{2}$/.test(end.trim()))
+        return timeLabel;
+    return `${formatTime12hr(start.trim())} - ${formatTime12hr(end.trim())}`;
 }
 
 // supabase.functions.invoke only sets error.message to a generic
@@ -682,6 +705,7 @@ export function AdminDashboard({
                 { id: "classmanagement", label: "Classes" },
                 { id: "subjects", label: "Subjects" },
                 { id: "rooms", label: "Room Management" },
+                { id: "teacherslist", label: "Teachers List" },
             ],
         },
         { id: "staff", label: "Staff & Teachers", icon: Users },
@@ -698,6 +722,8 @@ export function AdminDashboard({
             children: [
                 { id: "enrollment", label: "New / Transferee" },
                 { id: "enrollment-continuing", label: "Continuing Student" },
+                { id: "enrollment-pending", label: "Pending Enrollment" },
+                { id: "enrollment-recent", label: "Recently Enrolled" },
             ],
         },
         { id: "students", label: "Student Management", icon: GraduationCap },
@@ -750,7 +776,9 @@ export function AdminDashboard({
                 <OverviewSection user={user} schoolYear={schoolYear} />
             )}
             {(activeView === "enrollment" ||
-                activeView === "enrollment-continuing") &&
+                activeView === "enrollment-continuing" ||
+                activeView === "enrollment-pending" ||
+                activeView === "enrollment-recent") &&
                 isRegistrar && (
                     <EnrollmentSection
                         schoolYear={schoolYear}
@@ -759,7 +787,11 @@ export function AdminDashboard({
                         subPage={
                             activeView === "enrollment-continuing"
                                 ? "continuing"
-                                : "new"
+                                : activeView === "enrollment-pending"
+                                  ? "pending"
+                                  : activeView === "enrollment-recent"
+                                    ? "recent"
+                                    : "new"
                         }
                     />
                 )}
@@ -781,6 +813,9 @@ export function AdminDashboard({
             )}
             {activeView === "rooms" && !isRegistrar && (
                 <RoomManagement />
+            )}
+            {activeView === "teacherslist" && !isRegistrar && (
+                <TeachersListSection schoolYear={schoolYear} />
             )}
             {activeView === "staff" && !isRegistrar && (
                 <StaffManagement schoolYear={schoolYear} isAdmin={isAdmin} />
@@ -2991,6 +3026,8 @@ function StudentManagement({
     );
     const [showStatusDropdown, setShowStatusDropdown] = useState(false);
     const [showViewModal, setShowViewModal] = useState(false);
+    const [showSubjectAssessmentModal, setShowSubjectAssessmentModal] =
+        useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showStatusModal, setShowStatusModal] = useState(false);
     const [selectedStudent, setSelectedStudent] = useState<Student | null>(
@@ -3283,6 +3320,122 @@ function StudentManagement({
         };
     }, [showViewModal, selectedStudent]);
 
+    // Subject Assessment — the subjects assigned to the student's class section this school
+    // year, each with its assigned teacher and schedule. Refetched whenever the view modal
+    // opens for a student so it reflects any Class Management / Schedule edits made since.
+    type StudentSubjectAssessment = {
+        id: string;
+        subject: string;
+        teacher: string;
+        schedule: string | null;
+    };
+    const [subjectAssessment, setSubjectAssessment] = useState<
+        StudentSubjectAssessment[] | undefined
+    >(undefined);
+    const [subjectAssessmentError, setSubjectAssessmentError] = useState<
+        string | null
+    >(null);
+
+    useEffect(() => {
+        if (!showViewModal || !selectedStudent) {
+            setSubjectAssessment(undefined);
+            setSubjectAssessmentError(null);
+            return;
+        }
+        let cancelled = false;
+        setSubjectAssessment(undefined);
+        setSubjectAssessmentError(null);
+        (async () => {
+            const { data: syRow } = await supabase
+                .from("school_years")
+                .select("id")
+                .eq("label", schoolYear)
+                .maybeSingle();
+            const syId = syRow?.id ?? null;
+            if (!syId) {
+                if (!cancelled) setSubjectAssessment([]);
+                return;
+            }
+
+            const { data: sectionRow, error: sectionError } = await supabase
+                .from("class_sections")
+                .select("id")
+                .eq("school_year_id", syId)
+                .eq("grade_level", selectedStudent.grade)
+                .eq("section_name", selectedStudent.section)
+                .maybeSingle();
+            if (cancelled) return;
+            if (sectionError) {
+                setSubjectAssessmentError(sectionError.message);
+                return;
+            }
+            if (!sectionRow) {
+                setSubjectAssessment([]);
+                return;
+            }
+
+            const [{ data: cssRows, error: cssError }, { data: scheduleRows }] =
+                await Promise.all([
+                    supabase
+                        .from("class_section_subjects")
+                        .select(
+                            "id, archived, subjects(name), employees(full_name)",
+                        )
+                        .eq("class_section_id", sectionRow.id)
+                        .eq("archived", false),
+                    supabase
+                        .from("schedules")
+                        .select("subject, days, time_label, room")
+                        .eq("school_year_id", syId)
+                        .eq("grade_level", selectedStudent.grade)
+                        .eq("section_name", selectedStudent.section),
+                ]);
+            if (cancelled) return;
+            if (cssError) {
+                setSubjectAssessmentError(cssError.message);
+                return;
+            }
+
+            const scheduleFor = (subjectName: string) => {
+                const row = (scheduleRows ?? []).find(
+                    (s: any) =>
+                        (s.subject || "").trim().toLowerCase() ===
+                        subjectName.trim().toLowerCase(),
+                );
+                if (!row) return null;
+                const days = Array.isArray(row.days)
+                    ? row.days.join("/")
+                    : "";
+                return (
+                    [days, formatTimeLabel12hr(row.time_label), row.room]
+                        .filter(Boolean)
+                        .join(" • ") || null
+                );
+            };
+
+            setSubjectAssessment(
+                (cssRows ?? [])
+                    .map((r: any) => {
+                        const subjectName =
+                            r.subjects?.name ?? r.subjects?.[0]?.name ?? "";
+                        return {
+                            id: r.id,
+                            subject: subjectName,
+                            teacher:
+                                r.employees?.full_name ??
+                                r.employees?.[0]?.full_name ??
+                                "Unassigned",
+                            schedule: scheduleFor(subjectName),
+                        };
+                    })
+                    .sort((a, b) => a.subject.localeCompare(b.subject)),
+            );
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [showViewModal, selectedStudent, schoolYear]);
+
     const buildGuardianQRPayload = (
         student: Student,
         guardian: { id: string; name: string; relationship: string },
@@ -3518,7 +3671,6 @@ function StudentManagement({
                     <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
                         <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                                <Eye className="w-5 h-5" />
                                 <h2 className="text-lg font-semibold">
                                     Student Details
                                 </h2>
@@ -3583,6 +3735,42 @@ function StudentManagement({
                                             {selectedStudent.transferDate}
                                         </>
                                     )}
+                            </div>
+
+                            {/* Subject Assessment — subjects assigned to the student's class
+                          section, their teachers, and schedule; reflects Class Management /
+                          Schedule edits made since the modal was opened. Full details live in
+                          a dedicated modal (opened via "View") to save space here. */}
+                            <div className="border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                    <BookOpen className="w-5 h-5 text-[#1a2b4a]" />
+                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
+                                        Subject Assessment
+                                    </h3>
+                                    {subjectAssessment !== undefined && (
+                                        <span className="text-xs text-[#8b8476]">
+                                            ({subjectAssessment.length}{" "}
+                                            subject
+                                            {subjectAssessment.length === 1
+                                                ? ""
+                                                : "s"}
+                                            )
+                                        </span>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={() =>
+                                        setShowSubjectAssessmentModal(true)
+                                    }
+                                    disabled={
+                                        subjectAssessment === undefined ||
+                                        !!subjectAssessmentError
+                                    }
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    View
+                                </button>
                             </div>
 
                             {/* Parent/Guardian QR Authentication Pass */}
@@ -3695,6 +3883,146 @@ function StudentManagement({
                     </div>
                 </div>
             )}
+
+            {/* Subject Assessment Modal — full subject/teacher/schedule details, opened via
+          the "View" button on the Student Details modal, with a Print action. */}
+            {showSubjectAssessmentModal &&
+                selectedStudent &&
+                subjectAssessment !== undefined && (
+                    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+                        <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[85vh] overflow-y-auto scrollbar-none">
+                            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <BookOpen className="w-5 h-5" />
+                                    <div>
+                                        <h2 className="text-lg font-semibold">
+                                            Subject Assessment
+                                        </h2>
+                                        <p className="text-xs text-white/80">
+                                            {selectedStudent.name} •{" "}
+                                            {selectedStudent.grade}
+                                            {selectedStudent.section
+                                                ? ` - ${selectedStudent.section}`
+                                                : ""}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={async () => {
+                                            const rows = subjectAssessment
+                                                .map(
+                                                    (s) => `
+                                <tr>
+                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.subject}</td>
+                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.teacher}</td>
+                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.schedule || "No schedule set"}</td>
+                                </tr>`,
+                                                )
+                                                .join("");
+                                            const [logoDataUrl, schoolInfo] =
+                                                await Promise.all([
+                                                    getSchoolLogoDataUrl(),
+                                                    getSchoolSettings(),
+                                                ]);
+                                            const win = window.open(
+                                                "",
+                                                "_blank",
+                                            );
+                                            if (!win) return;
+                                            win.document.write(`
+                              <html>
+                                <head>
+                                  <title>Subject Assessment — ${selectedStudent.name}</title>
+                                  <style>
+                                    body { font-family: Arial, sans-serif; color: #2c2c2c; padding: 24px; }
+                                    .school-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #1a2b4a; padding-bottom: 12px; margin-bottom: 16px; }
+                                    .school-header img { width: 56px; height: 56px; object-fit: contain; }
+                                    .school-header h2 { font-size: 16px; margin: 0; color: #1a2b4a; }
+                                    .school-header p { font-size: 11px; color: #6b6456; margin: 2px 0 0; }
+                                    h1 { font-size: 18px; margin-bottom: 4px; }
+                                    p { font-size: 13px; color: #6b6456; margin-top: 0; }
+                                    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+                                    th { text-align: left; padding: 8px; background: #f3f4f6; }
+                                  </style>
+                                </head>
+                                <body>
+                                  <div class="school-header">
+                                    <img src="${logoDataUrl}" alt="School logo" />
+                                    <div>
+                                      <h2>${schoolInfo.school_name.toUpperCase()}</h2>
+                                      ${schoolInfo.school_address ? `<p>${schoolInfo.school_address}</p>` : ""}
+                                    </div>
+                                  </div>
+                                  <h1>Subject Assessment</h1>
+                                  <p>${selectedStudent.name} • ${selectedStudent.grade}${selectedStudent.section ? ` - ${selectedStudent.section}` : ""}</p>
+                                  <table>
+                                    <thead>
+                                      <tr><th>Subject</th><th>Teacher</th><th>Schedule</th></tr>
+                                    </thead>
+                                    <tbody>${rows}</tbody>
+                                  </table>
+                                </body>
+                              </html>
+                            `);
+                                            win.document.close();
+                                            win.focus();
+                                            win.print();
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
+                                    >
+                                        <Printer className="w-3.5 h-3.5" />
+                                        Print
+                                    </button>
+                                    <button
+                                        onClick={() =>
+                                            setShowSubjectAssessmentModal(
+                                                false,
+                                            )
+                                        }
+                                        className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="p-6">
+                                {subjectAssessment.length === 0 ? (
+                                    <p className="text-sm text-[#8b8476]">
+                                        No subjects are assigned to{" "}
+                                        {selectedStudent.grade}
+                                        {selectedStudent.section
+                                            ? ` - ${selectedStudent.section}`
+                                            : ""}{" "}
+                                        yet.
+                                    </p>
+                                ) : (
+                                    <div className="divide-y divide-gray-100">
+                                        {subjectAssessment.map((s) => (
+                                            <div
+                                                key={s.id}
+                                                className="py-3 flex items-center justify-between gap-3 flex-wrap"
+                                            >
+                                                <div>
+                                                    <p className="font-medium text-[#2c2c2c] text-sm">
+                                                        {s.subject}
+                                                    </p>
+                                                    <p className="text-xs text-[#8b8476]">
+                                                        {s.teacher}
+                                                    </p>
+                                                </div>
+                                                <p className="text-xs text-[#6b6456]">
+                                                    {s.schedule ||
+                                                        "No schedule set"}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
             {/* Edit Modal */}
             {showEditModal && selectedStudent && (
@@ -4134,6 +4462,315 @@ function StudentEditModal({
     );
 }
 
+// Teachers List (Admin, Class Management) — for each teacher, the subjects they're assigned
+// to teach this school year and the students enrolled in each of those classes.
+function TeachersListSection({ schoolYear }: { schoolYear: string }) {
+    type TeacherRow = { id: string; name: string };
+    type StudentRow = { id: string; name: string };
+    type SubjectAssignment = {
+        id: string;
+        subject: string;
+        grade: string;
+        section: string;
+        students: StudentRow[];
+    };
+
+    const [teachers, setTeachers] = useState<TeacherRow[]>([]);
+    const [loadingTeachers, setLoadingTeachers] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [search, setSearch] = useState("");
+    const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
+
+    const [assignments, setAssignments] = useState<SubjectAssignment[]>([]);
+    const [loadingAssignments, setLoadingAssignments] = useState(false);
+    const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+    const [viewStudentsFor, setViewStudentsFor] = useState<SubjectAssignment | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        setLoadingTeachers(true);
+        setLoadError(null);
+        supabase
+            .from("employees")
+            .select("id, full_name")
+            .eq("status", "active")
+            .eq("position", "Teacher")
+            .is("deleted_at", null)
+            .order("full_name")
+            .then(({ data, error }) => {
+                if (!active) return;
+                if (error) {
+                    setLoadError(error.message);
+                } else {
+                    setTeachers(
+                        (data ?? []).map((t: any) => ({ id: t.id, name: t.full_name })),
+                    );
+                }
+                setLoadingTeachers(false);
+            });
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    const filteredTeachers = teachers.filter(
+        (t) => !search.trim() || t.name.toLowerCase().includes(search.trim().toLowerCase()),
+    );
+
+    useEffect(() => {
+        if (!selectedTeacherId) {
+            setAssignments([]);
+            return;
+        }
+        let active = true;
+        setLoadingAssignments(true);
+        setAssignmentsError(null);
+        (async () => {
+            const { data: syRow } = await supabase
+                .from("school_years")
+                .select("id")
+                .eq("label", schoolYear)
+                .maybeSingle();
+            const syId = syRow?.id ?? null;
+            if (!syId) {
+                if (active) {
+                    setAssignments([]);
+                    setLoadingAssignments(false);
+                }
+                return;
+            }
+
+            const { data: assignRows, error: assignError } = await supabase
+                .from("class_section_subjects")
+                .select(
+                    "id, subjects(name), class_sections!inner(grade_level, section_name, school_year_id)",
+                )
+                .eq("teacher_id", selectedTeacherId)
+                .eq("archived", false)
+                .eq("class_sections.school_year_id", syId);
+
+            if (!active) return;
+            if (assignError) {
+                setAssignmentsError(assignError.message);
+                setLoadingAssignments(false);
+                return;
+            }
+
+            const rows = (assignRows ?? []) as any[];
+            const grades = Array.from(
+                new Set(rows.map((r) => r.class_sections?.grade_level).filter(Boolean)),
+            );
+
+            const { data: studentRows, error: studentError } = grades.length
+                ? await supabase
+                      .from("students")
+                      .select(
+                          "id, first_name, middle_name, last_name, suffix, grade_level, section, status, school_years!inner(label)",
+                      )
+                      .eq("status", "Active")
+                      .eq("school_years.label", schoolYear)
+                      .in("grade_level", grades)
+                : { data: [] as any[], error: null };
+
+            if (!active) return;
+            if (studentError) {
+                setAssignmentsError(studentError.message);
+                setLoadingAssignments(false);
+                return;
+            }
+
+            const studentsFor = (grade: string, section: string): StudentRow[] =>
+                (studentRows ?? [])
+                    .filter((s: any) => s.grade_level === grade && s.section === section)
+                    .map((s: any) => ({
+                        id: s.id,
+                        name:
+                            [s.first_name, s.middle_name, s.last_name]
+                                .filter(Boolean)
+                                .join(" ") + (s.suffix ? ` ${s.suffix}` : ""),
+                    }))
+                    .sort((a: StudentRow, b: StudentRow) => a.name.localeCompare(b.name));
+
+            setAssignments(
+                rows
+                    .map((r) => ({
+                        id: r.id,
+                        subject: r.subjects?.name || "",
+                        grade: r.class_sections?.grade_level || "",
+                        section: r.class_sections?.section_name || "",
+                        students: studentsFor(
+                            r.class_sections?.grade_level || "",
+                            r.class_sections?.section_name || "",
+                        ),
+                    }))
+                    .sort(
+                        (a, b) =>
+                            a.grade.localeCompare(b.grade) ||
+                            a.section.localeCompare(b.section) ||
+                            a.subject.localeCompare(b.subject),
+                    ),
+            );
+            setLoadingAssignments(false);
+        })();
+        return () => {
+            active = false;
+        };
+    }, [selectedTeacherId, schoolYear]);
+
+    const selectedTeacher = teachers.find((t) => t.id === selectedTeacherId) || null;
+
+    return (
+        <div className="space-y-6">
+            <div>
+                <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">Teachers List</h1>
+                <p className="text-[#6b6456]">
+                    See every subject a teacher is assigned to and the students in each class •{" "}
+                    {schoolYear}
+                </p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1">
+                    <div className="p-4 border-b border-gray-200">
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                            <input
+                                type="text"
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                placeholder="Search teachers..."
+                                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 focus:border-transparent"
+                            />
+                        </div>
+                    </div>
+                    <div className="divide-y divide-gray-200 max-h-[32rem] overflow-y-auto">
+                        {loadingTeachers ? (
+                            <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
+                                Loading teachers…
+                            </p>
+                        ) : loadError ? (
+                            <p className="px-4 py-8 text-center text-sm text-red-500">
+                                {loadError}
+                            </p>
+                        ) : filteredTeachers.length === 0 ? (
+                            <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
+                                No teachers found.
+                            </p>
+                        ) : (
+                            filteredTeachers.map((t) => (
+                                <button
+                                    key={t.id}
+                                    onClick={() => setSelectedTeacherId(t.id)}
+                                    className={`w-full text-left px-4 py-3 text-sm transition-colors ${
+                                        selectedTeacherId === t.id
+                                            ? "bg-[#1a2b4a]/5 text-[#1a2b4a] font-semibold"
+                                            : "hover:bg-[#faf8f5] text-[#2c2c2c]"
+                                    }`}
+                                >
+                                    {t.name}
+                                </button>
+                            ))
+                        )}
+                    </div>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-2">
+                    <div className="px-6 py-4 border-b border-gray-200">
+                        <h3 className="font-semibold text-[#1a2b4a]">
+                            {selectedTeacher ? selectedTeacher.name : "Select a teacher"}
+                        </h3>
+                        <p className="text-xs text-[#8b8476] mt-1">
+                            {selectedTeacher
+                                ? "Subjects assigned to this teacher and the students enrolled in each class."
+                                : "Pick a teacher from the list to see their subjects and students."}
+                        </p>
+                    </div>
+                    <div className="divide-y divide-gray-200">
+                        {!selectedTeacher ? null : loadingAssignments ? (
+                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
+                                Loading assignments…
+                            </p>
+                        ) : assignmentsError ? (
+                            <p className="px-6 py-8 text-center text-sm text-red-500">
+                                {assignmentsError}
+                            </p>
+                        ) : assignments.length === 0 ? (
+                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
+                                This teacher isn't assigned to any subjects this school year.
+                            </p>
+                        ) : (
+                            assignments.map((a) => (
+                                <div
+                                    key={a.id}
+                                    className="px-6 py-4 flex items-center justify-between gap-3 flex-wrap"
+                                >
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-sm font-medium text-[#2c2c2c]">
+                                            {a.subject}
+                                        </span>
+                                        <span className="text-sm text-[#8b8476]">
+                                            {a.grade} — {a.section}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => setViewStudentsFor(a)}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all shrink-0"
+                                    >
+                                        <Eye className="w-3.5 h-3.5" />
+                                        View Students ({a.students.length})
+                                    </button>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {viewStudentsFor && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto">
+                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+                            <div>
+                                <h3 className="text-base font-semibold">
+                                    {viewStudentsFor.subject}
+                                </h3>
+                                <p className="text-xs text-white/80 mt-0.5">
+                                    {viewStudentsFor.grade} —{" "}
+                                    {viewStudentsFor.section}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setViewStudentsFor(null)}
+                                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="p-6">
+                            {viewStudentsFor.students.length === 0 ? (
+                                <p className="text-sm text-[#8b8476] italic">
+                                    No students enrolled in this class yet.
+                                </p>
+                            ) : (
+                                <ul className="divide-y divide-gray-100">
+                                    {viewStudentsFor.students.map((s) => (
+                                        <li
+                                            key={s.id}
+                                            className="text-sm text-[#2c2c2c] py-2"
+                                        >
+                                            {s.name}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Class Management Section (Admin) — grade-level tabs, section rosters, and student assignment
 function ClassManagementSection({
     schoolYear,
@@ -4218,9 +4855,15 @@ function ClassManagementSection({
         teacherName: string;
         quarter: string;
         requestedAt: string;
+        status?: string;
+        resolvedAt?: string | null;
+        notes?: string | null;
     };
     const [showReopenRequestsModal, setShowReopenRequestsModal] =
         useState(false);
+    const [requestsModalTab, setRequestsModalTab] = useState<
+        "pending" | "history"
+    >("pending");
     const [reopenRequests, setReopenRequests] = useState<ReopenRequest[]>([]);
     const [reopenRequestsLoading, setReopenRequestsLoading] = useState(false);
     const [reopenRequestsError, setReopenRequestsError] = useState<
@@ -4229,6 +4872,14 @@ function ClassManagementSection({
     const [resolvingRequestId, setResolvingRequestId] = useState<string | null>(
         null,
     );
+    // Red-dot badge on the "Grade Edit Requests" button — count of requests still
+    // awaiting the admin's decision, kept fresh independently of the modal being open.
+    const [pendingReopenCount, setPendingReopenCount] = useState(0);
+    const [reopenHistory, setReopenHistory] = useState<ReopenRequest[]>([]);
+    const [reopenHistoryLoading, setReopenHistoryLoading] = useState(false);
+    const [reopenHistoryError, setReopenHistoryError] = useState<
+        string | null
+    >(null);
 
     const QUARTER_LABELS: Record<string, string> = {
         q1: "Quarter 1",
@@ -4247,7 +4898,7 @@ function ClassManagementSection({
         const { data, error } = await supabase
             .from("grade_reopen_requests")
             .select(
-                "id, quarter, requested_at, students(first_name, last_name), class_section_subjects(class_sections(grade_level, section_name), subjects(name)), employees(full_name)",
+                "id, quarter, requested_at, notes, students(first_name, last_name), class_section_subjects(class_sections(grade_level, section_name), subjects(name)), employees(full_name)",
             )
             .eq("school_year_id", schoolYearId)
             .eq("status", "pending")
@@ -4260,6 +4911,7 @@ function ClassManagementSection({
         setReopenRequests(
             (data ?? []).map((r: any) => ({
                 id: r.id,
+                notes: r.notes,
                 studentName: r.students
                     ? `${r.students.first_name} ${r.students.last_name}`
                     : "Unknown Student",
@@ -4274,9 +4926,69 @@ function ClassManagementSection({
         setReopenRequestsLoading(false);
     };
 
+    const refreshPendingReopenCount = async () => {
+        if (!schoolYearId) {
+            setPendingReopenCount(0);
+            return;
+        }
+        const { count } = await supabase
+            .from("grade_reopen_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("school_year_id", schoolYearId)
+            .eq("status", "pending");
+        setPendingReopenCount(count ?? 0);
+    };
+
+    useEffect(() => {
+        refreshPendingReopenCount();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [schoolYearId]);
+
+    const loadReopenHistory = async () => {
+        if (!schoolYearId) {
+            setReopenHistory([]);
+            return;
+        }
+        setReopenHistoryLoading(true);
+        setReopenHistoryError(null);
+        const { data, error } = await supabase
+            .from("grade_reopen_requests")
+            .select(
+                "id, quarter, requested_at, resolved_at, status, notes, students(first_name, last_name), class_section_subjects(class_sections(grade_level, section_name), subjects(name)), employees(full_name)",
+            )
+            .eq("school_year_id", schoolYearId)
+            .neq("status", "pending")
+            .order("resolved_at", { ascending: false, nullsFirst: false });
+        if (error) {
+            setReopenHistoryError(error.message);
+            setReopenHistoryLoading(false);
+            return;
+        }
+        setReopenHistory(
+            (data ?? []).map((r: any) => ({
+                id: r.id,
+                studentName: r.students
+                    ? `${r.students.first_name} ${r.students.last_name}`
+                    : "Unknown Student",
+                className: r.class_section_subjects
+                    ? `${r.class_section_subjects.class_sections?.grade_level ?? ""} ${r.class_section_subjects.class_sections?.section_name ?? ""} — ${r.class_section_subjects.subjects?.name ?? ""}`
+                    : "—",
+                teacherName: r.employees?.full_name || "Unknown Teacher",
+                quarter: QUARTER_LABELS[r.quarter] || r.quarter,
+                requestedAt: r.requested_at,
+                resolvedAt: r.resolved_at,
+                status: r.status,
+                notes: r.notes,
+            })),
+        );
+        setReopenHistoryLoading(false);
+    };
+
     const openReopenRequestsModal = () => {
         setShowReopenRequestsModal(true);
+        setRequestsModalTab("pending");
         loadReopenRequests();
+        loadReopenHistory();
     };
 
     const resolveReopenRequest = async (id: string, approve: boolean) => {
@@ -4295,6 +5007,8 @@ function ClassManagementSection({
             return;
         }
         setReopenRequests((prev) => prev.filter((r) => r.id !== id));
+        refreshPendingReopenCount();
+        loadReopenHistory();
     };
 
     const studentDisplayName = (r: any) =>
@@ -4701,15 +5415,28 @@ function ClassManagementSection({
         }
     };
 
+    // Builds the default subject rows for a grade level, one per subject in that grade's
+    // curriculum, with no teacher assigned yet. Used to auto-populate "Add Class" so the
+    // admin only has to pick teachers — the Add Subject / Remove buttons stay available
+    // for manual edits on top of this default set.
+    const buildDefaultSubjectRows = (grade: string) =>
+        subjectOptionsForGrade(grade).map((s, i) => ({
+            id: `S${i + 1}-${Date.now()}-${s.id}`,
+            subject: s.name,
+            teacher: "",
+            teacherId: null as string | null,
+        }));
+
     // Add Class modal — creates a brand-new grade/section with its adviser & subject-teacher assignments
     const openAddClassModal = () => {
         setClassFormError(null);
+        const initialGrade = selectedGrade === "All" ? CLASS_GRADE_OPTIONS[2] : selectedGrade;
         setNewClassForm({
-            grade: selectedGrade === "All" ? CLASS_GRADE_OPTIONS[2] : selectedGrade,
+            grade: initialGrade,
             section: "",
             adviserId: "",
             room: "",
-            subjects: [],
+            subjects: buildDefaultSubjectRows(initialGrade),
         });
         setAdviserSearch("");
         setShowAdviserResults(false);
@@ -4938,10 +5665,13 @@ function ClassManagementSection({
                 <div className="flex items-center gap-2">
                     <button
                         onClick={openReopenRequestsModal}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 border-gray-200 text-[#1a2b4a] bg-white hover:border-[#1a2b4a]/30 transition-all"
+                        className="relative flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border-2 border-gray-200 text-[#1a2b4a] bg-white hover:border-[#1a2b4a]/30 transition-all"
                     >
                         <ClipboardList className="w-4 h-4" />
                         <span>Grade Edit Requests</span>
+                        {pendingReopenCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-red-500 border-2 border-white" />
+                        )}
                     </button>
                     <button
                         onClick={openAddClassModal}
@@ -5075,16 +5805,16 @@ function ClassManagementSection({
                                                         No subjects assigned yet.
                                                     </p>
                                                 ) : (
-                                                    <div className="space-y-1.5 min-w-[220px]">
+                                                    <div className="space-y-1.5 min-w-[220px] max-w-[280px]">
                                                         {cls.subjects.slice(0, 3).map((sub) => (
                                                             <div
                                                                 key={sub.id}
-                                                                className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3"
+                                                                className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3 min-w-0"
                                                             >
-                                                                <span className="text-[#2c2c2c] font-medium">
+                                                                <span className="text-[#2c2c2c] font-medium truncate" title={sub.subject}>
                                                                     {sub.subject}
                                                                 </span>
-                                                                <span className="text-[#6b6456] text-xs">
+                                                                <span className="text-[#6b6456] text-xs shrink-0 truncate max-w-[100px]" title={sub.teacher}>
                                                                     {sub.teacher}
                                                                 </span>
                                                             </div>
@@ -5178,9 +5908,9 @@ function ClassManagementSection({
                                         ) : (
                                             <div className="space-y-1.5 mb-3">
                                                 {cls.subjects.slice(0, 3).map((sub) => (
-                                                    <div key={sub.id} className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3">
-                                                        <span className="text-[#2c2c2c] font-medium">{sub.subject}</span>
-                                                        <span className="text-[#6b6456] text-xs">{sub.teacher}</span>
+                                                    <div key={sub.id} className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3 min-w-0">
+                                                        <span className="text-[#2c2c2c] font-medium truncate" title={sub.subject}>{sub.subject}</span>
+                                                        <span className="text-[#6b6456] text-xs shrink-0 truncate max-w-[100px]" title={sub.teacher}>{sub.teacher}</span>
                                                     </div>
                                                 ))}
                                                 {cls.subjects.length > 3 && (
@@ -5228,8 +5958,8 @@ function ClassManagementSection({
             {/* Add Class Modal */}
             {showAddClassModal && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-none">
+                        <div className="sticky top-0 z-20 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
                             <div className="flex items-center gap-3">
                                 <h3 className="text-lg font-semibold">
                                     Class Details
@@ -5250,6 +5980,7 @@ function ClassManagementSection({
                                             setNewClassForm((f) => ({
                                                 ...f,
                                                 grade: e.target.value,
+                                                subjects: buildDefaultSubjectRows(e.target.value),
                                             }))
                                         }
                                         className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
@@ -5458,7 +6189,7 @@ function ClassManagementSection({
                                                             e.target.value,
                                                         )
                                                     }
-                                                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
                                                 >
                                                     <option value="">
                                                         Select subject
@@ -5483,7 +6214,7 @@ function ClassManagementSection({
                                                             e.target.value,
                                                         )
                                                     }
-                                                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
                                                 >
                                                     <option value="">
                                                         Select teacher
@@ -5775,7 +6506,7 @@ function ClassManagementSection({
             {editingSection && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+                        <div className="sticky top-0 z-20 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
                             <div className="flex items-center gap-3">
                                 <Edit className="w-5 h-5" />
                                 <h3 className="text-lg font-semibold">
@@ -5868,7 +6599,7 @@ function ClassManagementSection({
                                                             e.target.value,
                                                         )
                                                     }
-                                                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
                                                 >
                                                     <option value="">
                                                         Select subject
@@ -5894,7 +6625,7 @@ function ClassManagementSection({
                                                             e.target.value,
                                                         )
                                                     }
-                                                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
                                                 >
                                                     <option value="">
                                                         Select teacher
@@ -5952,10 +6683,9 @@ function ClassManagementSection({
             {/* Grade Edit Requests Modal */}
             {showReopenRequestsModal && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto scrollbar-none">
                         <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                                <ClipboardList className="w-5 h-5" />
                                 <h3 className="text-lg font-bold">
                                     Grade Edit Requests
                                 </h3>
@@ -5969,91 +6699,221 @@ function ClassManagementSection({
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
+                        <div className="px-6 pt-4 flex items-center gap-2 border-b border-gray-200">
+                            <button
+                                onClick={() => setRequestsModalTab("pending")}
+                                className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
+                                    requestsModalTab === "pending"
+                                        ? "border-[#7d1935] text-[#7d1935]"
+                                        : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
+                                }`}
+                            >
+                                Pending
+                                {pendingReopenCount > 0
+                                    ? ` (${pendingReopenCount})`
+                                    : ""}
+                            </button>
+                            <button
+                                onClick={() => setRequestsModalTab("history")}
+                                className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
+                                    requestsModalTab === "history"
+                                        ? "border-[#7d1935] text-[#7d1935]"
+                                        : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
+                                }`}
+                            >
+                                History
+                            </button>
+                        </div>
                         <div className="p-6 space-y-3">
-                            <p className="text-sm text-[#6b6456]">
-                                Teachers requesting to reopen a locked grade
-                                quarter for a student. Approving lets the
-                                teacher re-enter that quarter's grade; denying
-                                leaves it locked.
-                            </p>
-                            {reopenRequestsError && (
-                                <p className="text-sm text-red-500">
-                                    {reopenRequestsError}
-                                </p>
-                            )}
-                            {reopenRequestsLoading ? (
-                                <div className="text-center text-sm text-[#8b8476] py-10">
-                                    Loading requests…
-                                </div>
-                            ) : reopenRequests.length === 0 ? (
-                                <div className="text-center text-sm text-[#8b8476] py-10">
-                                    No pending grade edit requests.
-                                </div>
-                            ) : (
-                                <div className="space-y-3">
-                                    {reopenRequests.map((req) => (
-                                        <div
-                                            key={req.id}
-                                            className="border border-gray-200 rounded-xl p-4 flex items-center justify-between gap-4"
-                                        >
-                                            <div>
-                                                <p className="font-semibold text-[#1a2b4a] text-sm">
-                                                    {req.studentName} —{" "}
-                                                    {req.quarter}
-                                                </p>
-                                                <p className="text-xs text-[#6b6456] mt-0.5">
-                                                    {req.className}
-                                                </p>
-                                                <p className="text-xs text-[#8b8476] mt-0.5">
-                                                    Requested by{" "}
-                                                    {req.teacherName} •{" "}
-                                                    {new Date(
-                                                        req.requestedAt,
-                                                    ).toLocaleDateString(
-                                                        "en-US",
-                                                        {
-                                                            month: "short",
-                                                            day: "numeric",
-                                                            year: "numeric",
-                                                        },
-                                                    )}
-                                                </p>
-                                            </div>
-                                            <div className="flex items-center gap-2 shrink-0">
-                                                <button
-                                                    onClick={() =>
-                                                        resolveReopenRequest(
-                                                            req.id,
-                                                            false,
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        resolvingRequestId ===
-                                                        req.id
-                                                    }
-                                                    className="px-3 py-2 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#6b6456] hover:border-red-300 hover:text-red-600 transition-all disabled:opacity-50"
-                                                >
-                                                    Deny
-                                                </button>
-                                                <button
-                                                    onClick={() =>
-                                                        resolveReopenRequest(
-                                                            req.id,
-                                                            true,
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        resolvingRequestId ===
-                                                        req.id
-                                                    }
-                                                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white hover:shadow-lg transition-all disabled:opacity-50"
-                                                >
-                                                    Approve
-                                                </button>
-                                            </div>
+                            {requestsModalTab === "pending" ? (
+                                <>
+                                    <p className="text-sm text-[#6b6456]">
+                                        Teachers requesting to reopen a locked
+                                        grade quarter for a student. Approving
+                                        lets the teacher re-enter that
+                                        quarter's grade; denying leaves it
+                                        locked.
+                                    </p>
+                                    {reopenRequestsError && (
+                                        <p className="text-sm text-red-500">
+                                            {reopenRequestsError}
+                                        </p>
+                                    )}
+                                    {reopenRequestsLoading ? (
+                                        <div className="text-center text-sm text-[#8b8476] py-10">
+                                            Loading requests…
                                         </div>
-                                    ))}
-                                </div>
+                                    ) : reopenRequests.length === 0 ? (
+                                        <div className="text-center text-sm text-[#8b8476] py-10">
+                                            No pending grade edit requests.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {reopenRequests.map((req) => (
+                                                <div
+                                                    key={req.id}
+                                                    className="border border-gray-200 rounded-xl p-4 flex items-center justify-between gap-4"
+                                                >
+                                                    <div>
+                                                        <p className="font-semibold text-[#1a2b4a] text-sm">
+                                                            {req.studentName} —{" "}
+                                                            {req.quarter}
+                                                        </p>
+                                                        <p className="text-xs text-[#6b6456] mt-0.5">
+                                                            {req.className}
+                                                        </p>
+                                                        <p className="text-xs text-[#8b8476] mt-0.5">
+                                                            Requested by{" "}
+                                                            {req.teacherName} •{" "}
+                                                            {new Date(
+                                                                req.requestedAt,
+                                                            ).toLocaleString(
+                                                                "en-US",
+                                                                {
+                                                                    month: "short",
+                                                                    day: "numeric",
+                                                                    year: "numeric",
+                                                                    hour: "numeric",
+                                                                    minute: "2-digit",
+                                                                },
+                                                            )}
+                                                        </p>
+                                                        {req.notes && (
+                                                            <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
+                                                                "{req.notes}"
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <button
+                                                            onClick={() =>
+                                                                resolveReopenRequest(
+                                                                    req.id,
+                                                                    false,
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                resolvingRequestId ===
+                                                                req.id
+                                                            }
+                                                            className="px-3 py-2 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#6b6456] hover:border-red-300 hover:text-red-600 transition-all disabled:opacity-50"
+                                                        >
+                                                            Deny
+                                                        </button>
+                                                        <button
+                                                            onClick={() =>
+                                                                resolveReopenRequest(
+                                                                    req.id,
+                                                                    true,
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                resolvingRequestId ===
+                                                                req.id
+                                                            }
+                                                            className="px-3 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white hover:shadow-lg transition-all disabled:opacity-50"
+                                                        >
+                                                            Approve
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <p className="text-sm text-[#6b6456]">
+                                        A log of past grade edit requests and
+                                        how they were resolved, most recent
+                                        first.
+                                    </p>
+                                    {reopenHistoryError && (
+                                        <p className="text-sm text-red-500">
+                                            {reopenHistoryError}
+                                        </p>
+                                    )}
+                                    {reopenHistoryLoading ? (
+                                        <div className="text-center text-sm text-[#8b8476] py-10">
+                                            Loading history…
+                                        </div>
+                                    ) : reopenHistory.length === 0 ? (
+                                        <div className="text-center text-sm text-[#8b8476] py-10">
+                                            No resolved grade edit requests
+                                            yet.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {reopenHistory.map((req) => (
+                                                <div
+                                                    key={req.id}
+                                                    className="border border-gray-200 rounded-xl p-4"
+                                                >
+                                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                        <p className="font-semibold text-[#1a2b4a] text-sm">
+                                                            {req.studentName} —{" "}
+                                                            {req.quarter}
+                                                        </p>
+                                                        <span
+                                                            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                                                                req.status ===
+                                                                "approved"
+                                                                    ? "bg-green-100 text-green-700"
+                                                                    : req.status ===
+                                                                        "denied"
+                                                                      ? "bg-red-100 text-red-600"
+                                                                      : "bg-gray-100 text-gray-600"
+                                                            }`}
+                                                        >
+                                                            {req.status}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-xs text-[#6b6456] mt-0.5">
+                                                        {req.className}
+                                                    </p>
+                                                    <p className="text-xs text-[#8b8476] mt-0.5">
+                                                        Requested by{" "}
+                                                        {req.teacherName} •{" "}
+                                                        {new Date(
+                                                            req.requestedAt,
+                                                        ).toLocaleString(
+                                                            "en-US",
+                                                            {
+                                                                month: "short",
+                                                                day: "numeric",
+                                                                year: "numeric",
+                                                                hour: "numeric",
+                                                                minute: "2-digit",
+                                                            },
+                                                        )}
+                                                    </p>
+                                                    {req.resolvedAt && (
+                                                        <p className="text-xs text-[#8b8476] mt-0.5">
+                                                            Resolved{" "}
+                                                            {new Date(
+                                                                req.resolvedAt,
+                                                            ).toLocaleString(
+                                                                "en-US",
+                                                                {
+                                                                    month: "short",
+                                                                    day: "numeric",
+                                                                    year: "numeric",
+                                                                    hour: "numeric",
+                                                                    minute: "2-digit",
+                                                                },
+                                                            )}
+                                                        </p>
+                                                    )}
+                                                    {req.notes && (
+                                                        <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
+                                                            "{req.notes}"
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     </div>
@@ -6498,7 +7358,7 @@ function StaffManagement({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                     <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
-                        Staff & Teachers Management
+                        Staff Management
                     </h1>
                     <p className="text-[#6b6456]">
                         Manage all employees — teachers, staff, and
@@ -12900,8 +13760,9 @@ function EnrollmentSection({
     isArchivedYear?: boolean;
     user?: any;
     // Which sidebar sub-page under "Enrollment" is active — drives form.enrollmentType
-    // instead of an in-page tab bar.
-    subPage: "new" | "continuing";
+    // instead of an in-page tab bar. "pending" shows only the consolidated pending grids;
+    // "recent" shows only the Recently Enrolled grid.
+    subPage: "new" | "continuing" | "pending" | "recent";
 }) {
     type Enrollee = {
         id: string;
@@ -13095,6 +13956,7 @@ function EnrollmentSection({
     // dimension in sync with it without clobbering the New Student/Transferee choice
     // made inside the New/Transferee form.
     useEffect(() => {
+        if (subPage === "pending" || subPage === "recent") return;
         setForm((f) => {
             if (subPage === "continuing") {
                 return f.enrollmentType === "Continuing Student"
@@ -13758,10 +14620,16 @@ function EnrollmentSection({
                     Enrollment
                 </h1>
                 <p className="text-[#6b6456]">
-                    Directly enroll a new student • {schoolYear}
+                    {subPage === "pending"
+                        ? `Confirm enrollments awaiting fee payment • ${schoolYear}`
+                        : subPage === "recent"
+                          ? `Students recently enrolled or re-enrolled • ${schoolYear}`
+                          : `Directly enroll a new student • ${schoolYear}`}
                 </p>
             </div>
 
+            {subPage !== "pending" && subPage !== "recent" && (
+            <>
             {/* Direct Enrollment Form — which one shows is driven by the "New / Transferee"
           vs "Continuing Student" sub-page selected in the sidebar (see subPage prop). */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -14735,9 +15603,12 @@ function EnrollmentSection({
                     <CheckCircle className="w-4 h-4 shrink-0" /> {confirmNotice}
                 </div>
             )}
+            </>
+            )}
 
-            {/* Pending Re-Enrollments — lives on the Continuing Student sub-tab */}
-            {form.enrollmentType === "Continuing Student" && (
+            {/* Pending Re-Enrollments — moved off the New/Transferee & Continuing Student
+          sub-pages onto the dedicated "Pending Enrollment" sub-page (see subPage prop). */}
+            {subPage === "pending" && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200">
                     <h3 className="font-semibold text-[#1a2b4a]">
@@ -14813,8 +15684,9 @@ function EnrollmentSection({
             </div>
             )}
 
-            {/* Pending Enrollment (new students / transferees) — lives on the New/Transferee sub-tab */}
-            {form.enrollmentType !== "Continuing Student" && (
+            {/* Pending Enrollment (new students / transferees) — moved onto the dedicated
+          "Pending Enrollment" sub-page (see subPage prop). */}
+            {subPage === "pending" && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200">
                     <h3 className="font-semibold text-[#1a2b4a]">
@@ -14891,7 +15763,9 @@ function EnrollmentSection({
             </div>
             )}
 
-            {/* Recently Enrolled */}
+            {/* Recently Enrolled — lives on its own dedicated sub-page, off the New/Transferee
+          & Continuing Student sub-pages (see subPage prop). */}
+            {subPage === "recent" && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between gap-3 flex-wrap">
                     <h3 className="font-semibold text-[#1a2b4a]">
@@ -14987,6 +15861,7 @@ function EnrollmentSection({
                     </table>
                 </div>
             </div>
+            )}
 
             {submitNotice && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

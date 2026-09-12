@@ -530,6 +530,7 @@ function MyClasses({ user, schoolYear }: any) {
   const [gradeModal, setGradeModal] = useState<{ studentId: string; quarter: QuarterKey } | null>(null);
   const [gradeInput, setGradeInput] = useState(0);
   const [reopenTarget, setReopenTarget] = useState<{ studentId: string; quarter: QuarterKey } | null>(null);
+  const [reopenReason, setReopenReason] = useState('');
 
   const openGradeInput = (studentId: string, quarter: QuarterKey) => {
     setGradeModal({ studentId, quarter });
@@ -602,6 +603,7 @@ function MyClasses({ user, schoolYear }: any) {
       school_year_id: currentSchoolYearId,
       quarter: reopenTarget.quarter,
       requested_by: user.employeeId ?? null,
+      notes: reopenReason.trim() || null,
     });
     setGrades(prev => prev.map(s => {
       if (s.id !== reopenTarget.studentId) return s;
@@ -609,6 +611,7 @@ function MyClasses({ user, schoolYear }: any) {
       return { ...s, quarters };
     }));
     setReopenTarget(null);
+    setReopenReason('');
   };
 
   const renderQuarterCell = (student: GradeRow, quarter: QuarterKey) => {
@@ -1183,8 +1186,18 @@ function MyClasses({ user, schoolYear }: any) {
                 <p className="text-sm text-[#6b6456]">
                   Send a request to the admin to reopen <strong>{QUARTER_LABELS[reopenTarget.quarter]}</strong> for <strong>{targetStudent.student}</strong>? The admin must approve this before the grade can be edited again.
                 </p>
+                <div>
+                  <label className="block text-xs font-semibold text-[#6b6456] mb-1">Reason for request</label>
+                  <textarea
+                    value={reopenReason}
+                    onChange={(e) => setReopenReason(e.target.value)}
+                    rows={3}
+                    placeholder="Explain why this grade needs to be reopened..."
+                    className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm text-[#2c2c2c] focus:outline-none focus:border-[#c9a961] transition-all resize-none"
+                  />
+                </div>
                 <div className="flex gap-3 pt-2">
-                  <button onClick={() => setReopenTarget(null)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all">
+                  <button onClick={() => { setReopenTarget(null); setReopenReason(''); }} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all">
                     Cancel
                   </button>
                   <button onClick={confirmReopenRequest} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">
