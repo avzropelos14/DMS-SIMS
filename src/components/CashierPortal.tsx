@@ -6,7 +6,7 @@ import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import {
   LayoutDashboard, PhilippinePeso, Users, Search, Filter,
   Receipt, Calendar, User, XCircle, Plus,
-  Printer,
+  Printer, ArrowLeft,
   CheckCircle, AlertCircle, Clock, CreditCard, Eye, Download
 } from 'lucide-react';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES, getTuitionForGrade } from '../lib/tuition';
@@ -19,23 +19,7 @@ function PesoSignIcon({ className }: { className?: string }) {
   return <span className={`${className ?? ''} inline-flex items-center justify-center font-bold leading-none`}>₱</span>;
 }
 
-// Shared payment receipt modal — used by both Student Accounts ("View Receipt" on a
-// payment history entry) and Payment History (the Printer action). Shows the live
-// School Information (logo/name/address/contact) instead of hardcoded text, and its
-// container carries .print-receipt so the Print button's window.print() call actually
-// prints only the receipt (see the @media print rule in src/index.css).
-function ReceiptModal({
-  studentName,
-  studentId,
-  grade,
-  reference,
-  amount,
-  method,
-  dateLabel,
-  balanceBefore,
-  schoolYear,
-  onClose,
-}: {
+type ReceiptDetailsProps = {
   studentName: string;
   studentId: string;
   grade?: string;
@@ -45,165 +29,224 @@ function ReceiptModal({
   dateLabel: string;
   balanceBefore?: number;
   schoolYear: string;
-  onClose: () => void;
-}) {
+  schoolInfo: SchoolSettings;
+};
+
+// Receipt content shared by the "View Receipt" overlay (Student Accounts' payment
+// history entries) and the Payment History "Print Receipt" dedicated page. Includes
+// both the on-screen layout and the formal print-only official-receipt layout — the
+// latter shown only inside the @media print rule via print:block (see src/index.css).
+function ReceiptDetails({
+  studentName,
+  studentId,
+  grade,
+  reference,
+  amount,
+  method,
+  dateLabel,
+  balanceBefore,
+  schoolYear,
+  schoolInfo,
+}: ReceiptDetailsProps) {
+  return (
+    <>
+      <div className="space-y-4 print:hidden">
+        <div className="flex items-center gap-3 pb-4 border-b border-gray-200">
+          <img src={schoolLogo} alt="School Logo" className="w-14 h-14 object-contain shrink-0" />
+          <div>
+            <p className="font-bold text-[#1a2b4a] text-lg">{schoolInfo.school_name}</p>
+            {schoolInfo.school_motto && <p className="text-xs text-[#8b8476]">{schoolInfo.school_motto}</p>}
+            {schoolInfo.school_address && <p className="text-xs text-[#8b8476]">{schoolInfo.school_address}</p>}
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
+            <User className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <p className="font-semibold text-[#1a2b4a]">{studentName}</p>
+            <p className="text-sm text-[#8b8476] font-mono">{studentId}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-sm text-[#6b6456] mb-1">Receipt No.</p>
+            <p className="font-mono font-bold text-[#1a2b4a]">{reference}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-sm text-[#6b6456] mb-1">Date & Time</p>
+            <p className="font-semibold text-[#1a2b4a]">{dateLabel}</p>
+          </div>
+        </div>
+        {grade && (
+          <div className="p-4 bg-[#faf8f5] rounded-xl">
+            <p className="text-sm text-[#6b6456] mb-2">Student Information</p>
+            <p className="font-bold text-[#1a2b4a] text-lg">{studentName}</p>
+            <p className="text-sm text-[#8b8476]">{grade}</p>
+            <p className="text-xs text-[#8b8476] font-mono mt-1">ID: {studentId}</p>
+          </div>
+        )}
+        <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
+          <p className="text-sm text-green-800 mb-2">Payment Details</p>
+          <div className="flex justify-between items-center">
+            <span className="text-green-900 font-semibold">Amount Paid:</span>
+            <span className="text-3xl font-bold text-green-700">₱{amount.toLocaleString()}</span>
+          </div>
+          <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
+            <span className="text-green-800">Payment Method:</span>
+            <span className="font-semibold text-green-900 capitalize">{method.replace('_', ' ')}</span>
+          </div>
+        </div>
+        {balanceBefore !== undefined && (
+          <div className="p-4 bg-[#faf8f5] rounded-xl">
+            <div className="flex justify-between mb-2">
+              <span className="text-[#6b6456]">Previous Balance:</span>
+              <span className="font-semibold text-[#1a2b4a]">₱{balanceBefore.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between mb-2">
+              <span className="text-[#6b6456]">Amount Paid:</span>
+              <span className="font-semibold text-green-600">-₱{amount.toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between pt-2 border-t border-gray-300">
+              <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
+              <span className="font-bold text-[#1a2b4a] text-lg">₱{(balanceBefore - amount).toLocaleString()}</span>
+            </div>
+          </div>
+        )}
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
+          <p className="font-semibold mb-1">{schoolInfo.school_name}</p>
+          {schoolInfo.school_motto && <p>{schoolInfo.school_motto}</p>}
+          <p className="text-xs mt-2">Academic Year {schoolYear}</p>
+        </div>
+        <button
+          onClick={() => window.print()}
+          className="w-full px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-semibold flex items-center justify-center gap-2"
+        >
+          <Printer className="w-5 h-5" />
+          Print
+        </button>
+      </div>
+
+      {/* Print-only layout — a formal official-receipt document. Hidden on
+          screen; shown only inside the @media print rule via print:block. */}
+      <div className="hidden print:block text-black font-sans">
+        <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
+          <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
+          <div className="flex-1">
+            <p className="text-xl font-bold">{schoolInfo.school_name}</p>
+            {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
+            {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
+            {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
+              <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-lg font-bold uppercase tracking-wide">Official Receipt</p>
+            <p className="text-sm font-mono">No. {reference}</p>
+            <p className="text-sm">{dateLabel}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+          <div>
+            <p className="text-xs uppercase text-gray-500">Received From</p>
+            <p className="font-semibold">{studentName}</p>
+            <p className="font-mono text-xs">{studentId}</p>
+            {grade && <p className="text-xs">{grade}</p>}
+          </div>
+          <div className="text-right">
+            <p className="text-xs uppercase text-gray-500">School Year</p>
+            <p className="font-semibold">{schoolYear}</p>
+          </div>
+        </div>
+        <table className="w-full text-sm mb-4">
+          <thead>
+            <tr className="border-t-2 border-b border-black">
+              <th className="text-left py-2 font-semibold">Description</th>
+              <th className="text-right py-2 font-semibold">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="py-2 capitalize">Tuition Payment — {method.replace('_', ' ')}</td>
+              <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr className="border-t-2 border-black font-bold">
+              <td className="py-2">Total Paid</td>
+              <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
+            </tr>
+          </tfoot>
+        </table>
+        {balanceBefore !== undefined && (
+          <div className="text-sm mb-10 max-w-xs ml-auto space-y-1">
+            <div className="flex justify-between"><span>Previous Balance</span><span>₱{balanceBefore.toLocaleString()}</span></div>
+            <div className="flex justify-between"><span>Amount Paid</span><span>-₱{amount.toLocaleString()}</span></div>
+            <div className="flex justify-between font-bold border-t border-black pt-1"><span>Remaining Balance</span><span>₱{(balanceBefore - amount).toLocaleString()}</span></div>
+          </div>
+        )}
+        <div className="flex justify-between items-end mt-16 text-sm">
+          <div className="text-center">
+            <div className="border-t border-black w-44 pt-1">Authorized Signature</div>
+          </div>
+          <p className="text-xs text-gray-500 italic">THIS RECEIPT IS NOT VALID FOR CLAIM OF INPUT TAX.</p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function useSchoolInfo(): SchoolSettings {
   const [schoolInfo, setSchoolInfo] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
   useEffect(() => {
     let cancelled = false;
     getSchoolSettings().then((s) => { if (!cancelled) setSchoolInfo(s); });
     return () => { cancelled = true; };
   }, []);
+  return schoolInfo;
+}
 
+// Payment receipt overlay — used by Student Accounts' "View Receipt" button on a
+// payment history entry. Its container carries .print-receipt so the Print button's
+// window.print() call actually prints only the receipt (see the @media print rule
+// in src/index.css).
+function ReceiptModal(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onClose: () => void }) {
+  const schoolInfo = useSchoolInfo();
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none print-receipt">
         <div className="flex items-center justify-between mb-6 print:hidden">
           <h2 className="text-xl font-bold text-[#1a2b4a]">Payment Receipt</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-all">
+          <button onClick={props.onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-all">
             <XCircle className="w-5 h-5 text-gray-500" />
           </button>
         </div>
-        <div className="space-y-4 print:hidden">
-          <div className="flex items-center gap-3 pb-4 border-b border-gray-200">
-            <img src={schoolLogo} alt="School Logo" className="w-14 h-14 object-contain shrink-0" />
-            <div>
-              <p className="font-bold text-[#1a2b4a] text-lg">{schoolInfo.school_name}</p>
-              {schoolInfo.school_motto && <p className="text-xs text-[#8b8476]">{schoolInfo.school_motto}</p>}
-              {schoolInfo.school_address && <p className="text-xs text-[#8b8476]">{schoolInfo.school_address}</p>}
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
-              <User className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="font-semibold text-[#1a2b4a]">{studentName}</p>
-              <p className="text-sm text-[#8b8476] font-mono">{studentId}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-sm text-[#6b6456] mb-1">Receipt No.</p>
-              <p className="font-mono font-bold text-[#1a2b4a]">{reference}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-sm text-[#6b6456] mb-1">Date & Time</p>
-              <p className="font-semibold text-[#1a2b4a]">{dateLabel}</p>
-            </div>
-          </div>
-          {grade && (
-            <div className="p-4 bg-[#faf8f5] rounded-xl">
-              <p className="text-sm text-[#6b6456] mb-2">Student Information</p>
-              <p className="font-bold text-[#1a2b4a] text-lg">{studentName}</p>
-              <p className="text-sm text-[#8b8476]">{grade}</p>
-              <p className="text-xs text-[#8b8476] font-mono mt-1">ID: {studentId}</p>
-            </div>
-          )}
-          <div className="p-4 bg-gradient-to-r from-green-50 to-green-100 rounded-xl border-2 border-green-200">
-            <p className="text-sm text-green-800 mb-2">Payment Details</p>
-            <div className="flex justify-between items-center">
-              <span className="text-green-900 font-semibold">Amount Paid:</span>
-              <span className="text-3xl font-bold text-green-700">₱{amount.toLocaleString()}</span>
-            </div>
-            <div className="mt-3 pt-3 border-t border-green-300 flex justify-between text-sm">
-              <span className="text-green-800">Payment Method:</span>
-              <span className="font-semibold text-green-900 capitalize">{method.replace('_', ' ')}</span>
-            </div>
-          </div>
-          {balanceBefore !== undefined && (
-            <div className="p-4 bg-[#faf8f5] rounded-xl">
-              <div className="flex justify-between mb-2">
-                <span className="text-[#6b6456]">Previous Balance:</span>
-                <span className="font-semibold text-[#1a2b4a]">₱{balanceBefore.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between mb-2">
-                <span className="text-[#6b6456]">Amount Paid:</span>
-                <span className="font-semibold text-green-600">-₱{amount.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between pt-2 border-t border-gray-300">
-                <span className="font-semibold text-[#1a2b4a]">New Balance:</span>
-                <span className="font-bold text-[#1a2b4a] text-lg">₱{(balanceBefore - amount).toLocaleString()}</span>
-              </div>
-            </div>
-          )}
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-center text-sm text-blue-800">
-            <p className="font-semibold mb-1">{schoolInfo.school_name}</p>
-            {schoolInfo.school_motto && <p>{schoolInfo.school_motto}</p>}
-            <p className="text-xs mt-2">Academic Year {schoolYear}</p>
-          </div>
-          <button
-            onClick={() => window.print()}
-            className="w-full px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-semibold flex items-center justify-center gap-2"
-          >
-            <Printer className="w-5 h-5" />
-            Print
-          </button>
-        </div>
+        <ReceiptDetails {...props} schoolInfo={schoolInfo} />
+      </div>
+    </div>
+  );
+}
 
-        {/* Print-only layout — a formal official-receipt document. Hidden on
-            screen; shown only inside the @media print rule via print:block. */}
-        <div className="hidden print:block text-black font-sans">
-          <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
-            <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
-            <div className="flex-1">
-              <p className="text-xl font-bold">{schoolInfo.school_name}</p>
-              {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
-              {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
-              {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
-                <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
-              )}
-            </div>
-            <div className="text-right shrink-0">
-              <p className="text-lg font-bold uppercase tracking-wide">Official Receipt</p>
-              <p className="text-sm font-mono">No. {reference}</p>
-              <p className="text-sm">{dateLabel}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-            <div>
-              <p className="text-xs uppercase text-gray-500">Received From</p>
-              <p className="font-semibold">{studentName}</p>
-              <p className="font-mono text-xs">{studentId}</p>
-              {grade && <p className="text-xs">{grade}</p>}
-            </div>
-            <div className="text-right">
-              <p className="text-xs uppercase text-gray-500">School Year</p>
-              <p className="font-semibold">{schoolYear}</p>
-            </div>
-          </div>
-          <table className="w-full text-sm mb-4">
-            <thead>
-              <tr className="border-t-2 border-b border-black">
-                <th className="text-left py-2 font-semibold">Description</th>
-                <th className="text-right py-2 font-semibold">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="py-2 capitalize">Tuition Payment — {method.replace('_', ' ')}</td>
-                <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-black font-bold">
-                <td className="py-2">Total Paid</td>
-                <td className="py-2 text-right">₱{amount.toLocaleString()}</td>
-              </tr>
-            </tfoot>
-          </table>
-          {balanceBefore !== undefined && (
-            <div className="text-sm mb-10 max-w-xs ml-auto space-y-1">
-              <div className="flex justify-between"><span>Previous Balance</span><span>₱{balanceBefore.toLocaleString()}</span></div>
-              <div className="flex justify-between"><span>Amount Paid</span><span>-₱{amount.toLocaleString()}</span></div>
-              <div className="flex justify-between font-bold border-t border-black pt-1"><span>Remaining Balance</span><span>₱{(balanceBefore - amount).toLocaleString()}</span></div>
-            </div>
-          )}
-          <div className="flex justify-between items-end mt-16 text-sm">
-            <div className="text-center">
-              <div className="border-t border-black w-44 pt-1">Authorized Signature</div>
-            </div>
-            <p className="text-xs text-gray-500 italic">THIS RECEIPT IS NOT VALID FOR CLAIM OF INPUT TAX.</p>
-          </div>
+// Payment receipt — dedicated page (replaces the old "Print Receipt" modal on
+// Payment History). Same .print-receipt behavior as ReceiptModal.
+function ReceiptPage(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onBack: () => void }) {
+  const schoolInfo = useSchoolInfo();
+  return (
+    <div className="space-y-6">
+      <button
+        onClick={props.onBack}
+        className="flex items-center gap-2 text-[#1a2b4a] hover:text-[#2d4263] font-medium print:hidden"
+      >
+        <ArrowLeft className="w-5 h-5" />
+        <span>Back to Payment History</span>
+      </button>
+      <div className="print:hidden">
+        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Payment Receipt</h1>
+        <p className="text-[#6b6456]">{props.studentName}</p>
+      </div>
+      <div className="max-w-2xl mx-auto w-full">
+        <div className="bg-white rounded-xl shadow-lg p-8 print-receipt">
+          <ReceiptDetails {...props} schoolInfo={schoolInfo} />
         </div>
       </div>
     </div>
@@ -792,13 +835,13 @@ function ProcessPayment({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES, enroll
 
             {/* Search Bar */}
             <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6b6456]" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6b6456]" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => { setSearchTerm(e.target.value); setSelectedStudent(null); }}
                 placeholder="Search by name or student ID..."
-                className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
+                className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-2 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
               />
             </div>
 
@@ -1155,11 +1198,368 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
   const paymentHistory = paymentsByStudent[(viewDetailsStudent || printStatementStudent)?.id] || [];
 
   const filteredStudents = students.filter(s => {
-    const matchesSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    const matchesSearch = s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          s.id.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterStatus === 'all' || s.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
+
+  // Student Details — dedicated page (replaces the old "View Details" modal).
+  if (viewDetailsStudent) {
+    return (
+      <div className="space-y-6">
+        <button
+          onClick={() => setViewDetailsStudent(null)}
+          className="flex items-center gap-2 text-[#1a2b4a] hover:text-[#2d4263] font-medium"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>Back to Student Accounts</span>
+        </button>
+        <div>
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student Details</h1>
+          <p className="text-[#6b6456]">{viewDetailsStudent.name}</p>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-8">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
+                <User className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.name}</p>
+                <p className="text-sm text-[#8b8476] font-mono">{viewDetailsStudent.id}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Grade:</p>
+                <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.grade}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Total Fee:</p>
+                <p className="font-semibold text-[#1a2b4a]">₱{viewDetailsStudent.totalFee.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Already Paid:</p>
+                <p className="font-semibold text-green-600">₱{viewDetailsStudent.paid.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Late Payment Penalties:</p>
+                {viewDetailsStudent.penalties > 0 ? (
+                  <div>
+                    <p className="font-bold text-orange-600">₱{viewDetailsStudent.penalties.toLocaleString()}</p>
+                    <p className="text-xs text-[#8b8476] mt-1">
+                      ₱200 × {viewDetailsStudent.monthsOverdue} {viewDetailsStudent.monthsOverdue === 1 ? 'month' : 'months'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="font-semibold text-green-600">₱0</p>
+                )}
+              </div>
+              <div className="col-span-2 pt-2 border-t border-gray-300">
+                <p className="text-sm text-[#6b6456] mb-1">Total Outstanding Balance:</p>
+                <p className="font-bold text-red-600 text-lg">₱{(viewDetailsStudent.balance + viewDetailsStudent.penalties).toLocaleString()}</p>
+                {viewDetailsStudent.penalties > 0 && (
+                  <p className="text-xs text-[#8b8476] mt-1">
+                    (Balance: ₱{viewDetailsStudent.balance.toLocaleString()} + Penalties: ₱{viewDetailsStudent.penalties.toLocaleString()})
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
+              <div className="space-y-2">
+                {paymentHistory.length === 0 && (
+                  <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
+                )}
+                {paymentHistory.map((payment, idx) => (
+                  <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all gap-3">
+                    <div className="flex-1">
+                      <div className="grid grid-cols-2 gap-4 mb-1">
+                        <div>
+                          <p className="text-xs text-[#8b8476] mb-1">Payment</p>
+                          <p className="text-lg font-bold text-green-600">₱{payment.amount.toLocaleString()}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-[#8b8476] mb-1">Status</p>
+                          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                            <CheckCircle className="w-3 h-3" />
+                            Paid
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-[#8b8476]">
+                        <span>{viewDetailsStudent.grade}</span>
+                        <span>•</span>
+                        <span>{payment.method}</span>
+                        <span>•</span>
+                        <span>{payment.date}</span>
+                        <span>•</span>
+                        <span className="font-mono">{payment.reference}</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setReceiptPayment(payment)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] bg-white hover:border-[#c9a961] transition-all whitespace-nowrap shrink-0"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>View Receipt</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {receiptPayment && (
+          <ReceiptModal
+            studentName={viewDetailsStudent?.name}
+            studentId={viewDetailsStudent?.id}
+            grade={viewDetailsStudent?.grade}
+            reference={receiptPayment.reference}
+            amount={receiptPayment.amount}
+            method={receiptPayment.method}
+            dateLabel={receiptPayment.date}
+            schoolYear={schoolYear}
+            onClose={() => setReceiptPayment(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Print Statement of Accounts — dedicated page (replaces the old "Print Statement" modal).
+  if (printStatementStudent) {
+    return (
+      <div className="space-y-6">
+        <button
+          onClick={() => setPrintStatementStudent(null)}
+          className="flex items-center gap-2 text-[#1a2b4a] hover:text-[#2d4263] font-medium print:hidden"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>Back to Student Accounts</span>
+        </button>
+        <div className="print:hidden">
+          <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Print Statement of Accounts</h1>
+          <p className="text-[#6b6456]">{printStatementStudent.name}</p>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-8 print-receipt">
+          <div className="space-y-4 print:hidden">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
+                <User className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.name}</p>
+                <p className="text-sm text-[#8b8476] font-mono">{printStatementStudent.id}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Grade:</p>
+                <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.grade}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Total Fee:</p>
+                <p className="font-semibold text-[#1a2b4a]">₱{printStatementStudent.totalFee.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Already Paid:</p>
+                <p className="font-semibold text-green-600">₱{printStatementStudent.paid.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Balance Due:</p>
+                <p className="font-semibold text-[#1a2b4a]">₱{printStatementStudent.balance.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Late Penalties:</p>
+                {printStatementStudent.penalties > 0 ? (
+                  <div>
+                    <p className="font-bold text-orange-600">₱{printStatementStudent.penalties.toLocaleString()}</p>
+                    <p className="text-xs text-[#8b8476] mt-1">
+                      {printStatementStudent.monthsOverdue} {printStatementStudent.monthsOverdue === 1 ? 'month' : 'months'} × ₱200
+                    </p>
+                  </div>
+                ) : (
+                  <p className="font-semibold text-green-600">₱0</p>
+                )}
+              </div>
+              <div>
+                <p className="text-sm text-[#6b6456] mb-1">Status:</p>
+                <p className="font-semibold text-[#1a2b4a]">
+                  {printStatementStudent.status === 'paid' && 'Paid'}
+                  {printStatementStudent.status === 'partial' && 'Partial'}
+                  {printStatementStudent.status === 'overdue' && 'Overdue'}
+                </p>
+              </div>
+              <div className="col-span-2 pt-2 border-t border-gray-300">
+                <p className="text-sm text-[#6b6456] mb-1">Total Amount Due:</p>
+                <p className="font-bold text-red-600 text-xl">₱{(printStatementStudent.balance + printStatementStudent.penalties).toLocaleString()}</p>
+                {printStatementStudent.penalties > 0 && (
+                  <p className="text-xs text-[#8b8476] mt-1">
+                    (Balance: ₱{printStatementStudent.balance.toLocaleString()} + Penalties: ₱{printStatementStudent.penalties.toLocaleString()})
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="mt-6">
+              <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {paymentHistory.length === 0 && (
+                  <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
+                )}
+                {paymentHistory.map((payment, idx) => (
+                  <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all">
+
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.name}</p>
+                        <p className="text-lg font-bold text-green-600">₱{payment.amount.toLocaleString()}</p>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-[#8b8476]">
+                        <span>{printStatementStudent.grade}</span>
+                        <span>•</span>
+                        <span>{payment.method}</span>
+                        <span>•</span>
+                        <span>{payment.date}</span>
+                        <span>•</span>
+                        <span className="font-mono">{payment.reference}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => window.print()}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-semibold flex items-center justify-center gap-2"
+              >
+                <Printer className="w-5 h-5" />
+                Print
+              </button>
+            </div>
+          </div>
+
+          {/* Print-only layout — mirrors the school's Statement of Account document.
+              Hidden on screen; shown only inside the @media print rule via print:block. */}
+          <div className="hidden print:block text-black font-sans text-sm">
+            <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
+              <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
+              <div className="flex-1">
+                <p className="text-xl font-bold uppercase">{schoolInfo.school_name}</p>
+                {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
+                {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
+                {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
+                  <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
+                )}
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-lg font-bold uppercase tracking-wide">Statement of Account</p>
+                <p className="text-xs">S.Y. {schoolYear} | Statement for {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6 mb-5">
+              <div>
+                <p className="text-xs uppercase font-bold tracking-wide mb-1">Student</p>
+                <div className="text-xs space-y-0.5">
+                  <p className="flex justify-between"><span className="text-gray-600">Student No.</span><span className="font-mono">{printStatementStudent.id}</span></p>
+                  <p className="flex justify-between"><span className="text-gray-600">Name</span><span className="font-semibold">{printStatementStudent.name}</span></p>
+                  <p className="flex justify-between"><span className="text-gray-600">Grade</span><span className="font-semibold">{printStatementStudent.grade}</span></p>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs uppercase font-bold tracking-wide mb-1">Statement Details</p>
+                <div className="text-xs space-y-0.5">
+                  <p className="flex justify-between"><span className="text-gray-600">School Year</span><span className="font-semibold">{schoolYear}</span></p>
+                  <p className="flex justify-between"><span className="text-gray-600">Statement Month</span><span className="font-semibold">{new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span></p>
+                  <p className="flex justify-between"><span className="text-gray-600">Status</span><span className="font-semibold">
+                    {printStatementStudent.status === 'paid' && 'Paid'}
+                    {printStatementStudent.status === 'partial' && 'Partial'}
+                    {printStatementStudent.status === 'overdue' && 'Overdue'}
+                  </span></p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-5 pb-5 border-b border-gray-300">
+              <p className="text-sm font-bold uppercase tracking-wide">
+                Tuition Payment Due — {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </p>
+              <p className="text-xs text-gray-500 mb-2">Includes outstanding balance and late surcharge.</p>
+              <p className="text-4xl font-bold mb-2">₱{(printStatementStudent.balance + printStatementStudent.penalties).toLocaleString()}</p>
+              <div className="text-xs space-y-0.5 max-w-xs">
+                <p className="flex justify-between"><span>Balance Due</span><span>₱{printStatementStudent.balance.toLocaleString()}</span></p>
+                {printStatementStudent.penalties > 0 && (
+                  <p className="flex justify-between">
+                    <span>Late Surcharge ({printStatementStudent.monthsOverdue} {printStatementStudent.monthsOverdue === 1 ? 'month' : 'months'} × ₱200)</span>
+                    <span>₱{printStatementStudent.penalties.toLocaleString()}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6 mb-5">
+              <div>
+                <p className="text-xs uppercase font-bold tracking-wide mb-1">Account Totals</p>
+                <div className="text-xs space-y-0.5">
+                  <p className="flex justify-between"><span>Current Charges</span><span className="font-semibold">₱{printStatementStudent.totalFee.toLocaleString()}</span></p>
+                  <p className="flex justify-between"><span>Posted Payments</span><span className="font-semibold">₱{printStatementStudent.paid.toLocaleString()}</span></p>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs uppercase font-bold tracking-wide mb-1">Payment Status</p>
+                <div className="text-xs space-y-0.5">
+                  <p className="flex justify-between"><span className="text-gray-600">Last Payment</span><span className="font-semibold">{paymentHistory[0]?.date || '—'}</span></p>
+                  {paymentHistory[0] && (
+                    <>
+                      <p className="flex justify-between"><span className="text-gray-600">Receipt</span><span className="font-mono">{paymentHistory[0].reference}</span></p>
+                      <p className="flex justify-between"><span className="text-gray-600">Amount</span><span className="font-semibold">₱{paymentHistory[0].amount.toLocaleString()}</span></p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <p className="text-xs uppercase font-bold tracking-wide mb-2">Payment History</p>
+              {paymentHistory.length === 0 ? (
+                <p className="text-xs text-gray-500">No payments recorded yet.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-black">
+                      <th className="text-left py-1.5 font-semibold">Date</th>
+                      <th className="text-left py-1.5 font-semibold">Receipt No.</th>
+                      <th className="text-right py-1.5 font-semibold">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentHistory.map((payment, idx) => (
+                      <tr key={`${payment.date}-${idx}`} className="border-b border-gray-300">
+                        <td className="py-1">{payment.date}</td>
+                        <td className="py-1 font-mono">{payment.reference}</td>
+                        <td className="py-1 text-right">₱{payment.amount.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <p className="text-center text-xs text-gray-500 italic">
+              Please keep this statement for your records. Contact the school office for questions or corrections.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1186,13 +1586,13 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#6b6456]" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6b6456]" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search by name or student ID..."
-              className="w-full pl-12 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
+              className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-2 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
             />
           </div>
           <div className="flex gap-2">
@@ -1328,352 +1728,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
         </div>
       </div>
 
-      {/* View Details Modal */}
-      {viewDetailsStudent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-[#1a2b4a]">Student Details</h2>
-              <button
-                onClick={() => setViewDetailsStudent(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-all"
-              >
-                <XCircle className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
-                  <User className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.name}</p>
-                  <p className="text-sm text-[#8b8476] font-mono">{viewDetailsStudent.id}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Grade:</p>
-                  <p className="font-semibold text-[#1a2b4a]">{viewDetailsStudent.grade}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Total Fee:</p>
-                  <p className="font-semibold text-[#1a2b4a]">₱{viewDetailsStudent.totalFee.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Already Paid:</p>
-                  <p className="font-semibold text-green-600">₱{viewDetailsStudent.paid.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Late Payment Penalties:</p>
-                  {viewDetailsStudent.penalties > 0 ? (
-                    <div>
-                      <p className="font-bold text-orange-600">₱{viewDetailsStudent.penalties.toLocaleString()}</p>
-                      <p className="text-xs text-[#8b8476] mt-1">
-                        ₱200 × {viewDetailsStudent.monthsOverdue} {viewDetailsStudent.monthsOverdue === 1 ? 'month' : 'months'}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="font-semibold text-green-600">₱0</p>
-                  )}
-                </div>
-                <div className="col-span-2 pt-2 border-t border-gray-300">
-                  <p className="text-sm text-[#6b6456] mb-1">Total Outstanding Balance:</p>
-                  <p className="font-bold text-red-600 text-lg">₱{(viewDetailsStudent.balance + viewDetailsStudent.penalties).toLocaleString()}</p>
-                  {viewDetailsStudent.penalties > 0 && (
-                    <p className="text-xs text-[#8b8476] mt-1">
-                      (Balance: ₱{viewDetailsStudent.balance.toLocaleString()} + Penalties: ₱{viewDetailsStudent.penalties.toLocaleString()})
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {paymentHistory.length === 0 && (
-                    <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
-                  )}
-                  {paymentHistory.map((payment, idx) => (
-                    <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all gap-3">
-                      <div className="flex-1">
-                        <div className="grid grid-cols-2 gap-4 mb-1">
-                          <div>
-                            <p className="text-xs text-[#8b8476] mb-1">Payment</p>
-                            <p className="text-lg font-bold text-green-600">₱{payment.amount.toLocaleString()}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs text-[#8b8476] mb-1">Status</p>
-                            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-                              <CheckCircle className="w-3 h-3" />
-                              Paid
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-[#8b8476]">
-                          <span>{viewDetailsStudent.grade}</span>
-                          <span>•</span>
-                          <span>{payment.method}</span>
-                          <span>•</span>
-                          <span>{payment.date}</span>
-                          <span>•</span>
-                          <span className="font-mono">{payment.reference}</span>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => setReceiptPayment(payment)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] bg-white hover:border-[#c9a961] transition-all whitespace-nowrap shrink-0"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>View Receipt</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {receiptPayment && (
-        <ReceiptModal
-          studentName={viewDetailsStudent?.name}
-          studentId={viewDetailsStudent?.id}
-          grade={viewDetailsStudent?.grade}
-          reference={receiptPayment.reference}
-          amount={receiptPayment.amount}
-          method={receiptPayment.method}
-          dateLabel={receiptPayment.date}
-          schoolYear={schoolYear}
-          onClose={() => setReceiptPayment(null)}
-        />
-      )}
-
-      {/* Print Statement Modal */}
-      {printStatementStudent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-lg p-4 sm:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none print-receipt">
-            <div className="flex items-center justify-between mb-6 print:hidden">
-              <h2 className="text-xl font-bold text-[#1a2b4a]">Print Statement of Accounts</h2>
-              <button
-                onClick={() => setPrintStatementStudent(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-all"
-              >
-                <XCircle className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="space-y-4 print:hidden">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-full flex items-center justify-center">
-                  <User className="w-6 h-6 text-white" />
-                </div>
-                <div>
-                  <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.name}</p>
-                  <p className="text-sm text-[#8b8476] font-mono">{printStatementStudent.id}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Grade:</p>
-                  <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.grade}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Total Fee:</p>
-                  <p className="font-semibold text-[#1a2b4a]">₱{printStatementStudent.totalFee.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Already Paid:</p>
-                  <p className="font-semibold text-green-600">₱{printStatementStudent.paid.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Balance Due:</p>
-                  <p className="font-semibold text-[#1a2b4a]">₱{printStatementStudent.balance.toLocaleString()}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Late Penalties:</p>
-                  {printStatementStudent.penalties > 0 ? (
-                    <div>
-                      <p className="font-bold text-orange-600">₱{printStatementStudent.penalties.toLocaleString()}</p>
-                      <p className="text-xs text-[#8b8476] mt-1">
-                        {printStatementStudent.monthsOverdue} {printStatementStudent.monthsOverdue === 1 ? 'month' : 'months'} × ₱200
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="font-semibold text-green-600">₱0</p>
-                  )}
-                </div>
-                <div>
-                  <p className="text-sm text-[#6b6456] mb-1">Status:</p>
-                  <p className="font-semibold text-[#1a2b4a]">
-                    {printStatementStudent.status === 'paid' && 'Paid'}
-                    {printStatementStudent.status === 'partial' && 'Partial'}
-                    {printStatementStudent.status === 'overdue' && 'Overdue'}
-                  </p>
-                </div>
-                <div className="col-span-2 pt-2 border-t border-gray-300">
-                  <p className="text-sm text-[#6b6456] mb-1">Total Amount Due:</p>
-                  <p className="font-bold text-red-600 text-xl">₱{(printStatementStudent.balance + printStatementStudent.penalties).toLocaleString()}</p>
-                  {printStatementStudent.penalties > 0 && (
-                    <p className="text-xs text-[#8b8476] mt-1">
-                      (Balance: ₱{printStatementStudent.balance.toLocaleString()} + Penalties: ₱{printStatementStudent.penalties.toLocaleString()})
-                    </p>
-                  )}
-                </div>
-              </div>
-              <div className="mt-6">
-                <h3 className="text-lg font-bold text-[#1a2b4a] mb-3">Payment History</h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {paymentHistory.length === 0 && (
-                    <p className="text-sm text-[#8b8476] py-4 text-center">No payments recorded yet.</p>
-                  )}
-                  {paymentHistory.map((payment, idx) => (
-                    <div key={`${payment.date}-${idx}`} className="flex items-center justify-between px-4 py-2 bg-[#faf8f5] rounded-lg border border-gray-200 hover:shadow-md transition-all">
-                      
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="font-semibold text-[#1a2b4a]">{printStatementStudent.name}</p>
-                          <p className="text-lg font-bold text-green-600">₱{payment.amount.toLocaleString()}</p>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-[#8b8476]">
-                          <span>{printStatementStudent.grade}</span>
-                          <span>•</span>
-                          <span>{payment.method}</span>
-                          <span>•</span>
-                          <span>{payment.date}</span>
-                          <span>•</span>
-                          <span className="font-mono">{payment.reference}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => window.print()}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg hover:shadow-lg transition-all font-semibold flex items-center justify-center gap-2"
-                >
-                  <Printer className="w-5 h-5" />
-                  Print
-                </button>
-              </div>
-            </div>
-
-            {/* Print-only layout — mirrors the school's Statement of Account document.
-                Hidden on screen; shown only inside the @media print rule via print:block. */}
-            <div className="hidden print:block text-black font-sans text-sm">
-              <div className="flex items-start gap-4 border-b-2 border-black pb-4 mb-4">
-                <img src={schoolLogo} alt="School Logo" className="w-16 h-16 object-contain shrink-0" />
-                <div className="flex-1">
-                  <p className="text-xl font-bold uppercase">{schoolInfo.school_name}</p>
-                  {schoolInfo.school_motto && <p className="text-xs italic">{schoolInfo.school_motto}</p>}
-                  {schoolInfo.school_address && <p className="text-xs">{schoolInfo.school_address}</p>}
-                  {(schoolInfo.contact_phone || schoolInfo.contact_email) && (
-                    <p className="text-xs">{[schoolInfo.contact_phone, schoolInfo.contact_email].filter(Boolean).join(' • ')}</p>
-                  )}
-                </div>
-                <div className="text-right shrink-0">
-                  <p className="text-lg font-bold uppercase tracking-wide">Statement of Account</p>
-                  <p className="text-xs">S.Y. {schoolYear} | Statement for {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-6 mb-5">
-                <div>
-                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Student</p>
-                  <div className="text-xs space-y-0.5">
-                    <p className="flex justify-between"><span className="text-gray-600">Student No.</span><span className="font-mono">{printStatementStudent.id}</span></p>
-                    <p className="flex justify-between"><span className="text-gray-600">Name</span><span className="font-semibold">{printStatementStudent.name}</span></p>
-                    <p className="flex justify-between"><span className="text-gray-600">Grade</span><span className="font-semibold">{printStatementStudent.grade}</span></p>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Statement Details</p>
-                  <div className="text-xs space-y-0.5">
-                    <p className="flex justify-between"><span className="text-gray-600">School Year</span><span className="font-semibold">{schoolYear}</span></p>
-                    <p className="flex justify-between"><span className="text-gray-600">Statement Month</span><span className="font-semibold">{new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span></p>
-                    <p className="flex justify-between"><span className="text-gray-600">Status</span><span className="font-semibold">
-                      {printStatementStudent.status === 'paid' && 'Paid'}
-                      {printStatementStudent.status === 'partial' && 'Partial'}
-                      {printStatementStudent.status === 'overdue' && 'Overdue'}
-                    </span></p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mb-5 pb-5 border-b border-gray-300">
-                <p className="text-sm font-bold uppercase tracking-wide">
-                  Tuition Payment Due — {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                </p>
-                <p className="text-xs text-gray-500 mb-2">Includes outstanding balance and late surcharge.</p>
-                <p className="text-4xl font-bold mb-2">₱{(printStatementStudent.balance + printStatementStudent.penalties).toLocaleString()}</p>
-                <div className="text-xs space-y-0.5 max-w-xs">
-                  <p className="flex justify-between"><span>Balance Due</span><span>₱{printStatementStudent.balance.toLocaleString()}</span></p>
-                  {printStatementStudent.penalties > 0 && (
-                    <p className="flex justify-between">
-                      <span>Late Surcharge ({printStatementStudent.monthsOverdue} {printStatementStudent.monthsOverdue === 1 ? 'month' : 'months'} × ₱200)</span>
-                      <span>₱{printStatementStudent.penalties.toLocaleString()}</span>
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-6 mb-5">
-                <div>
-                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Account Totals</p>
-                  <div className="text-xs space-y-0.5">
-                    <p className="flex justify-between"><span>Current Charges</span><span className="font-semibold">₱{printStatementStudent.totalFee.toLocaleString()}</span></p>
-                    <p className="flex justify-between"><span>Posted Payments</span><span className="font-semibold">₱{printStatementStudent.paid.toLocaleString()}</span></p>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs uppercase font-bold tracking-wide mb-1">Payment Status</p>
-                  <div className="text-xs space-y-0.5">
-                    <p className="flex justify-between"><span className="text-gray-600">Last Payment</span><span className="font-semibold">{paymentHistory[0]?.date || '—'}</span></p>
-                    {paymentHistory[0] && (
-                      <>
-                        <p className="flex justify-between"><span className="text-gray-600">Receipt</span><span className="font-mono">{paymentHistory[0].reference}</span></p>
-                        <p className="flex justify-between"><span className="text-gray-600">Amount</span><span className="font-semibold">₱{paymentHistory[0].amount.toLocaleString()}</span></p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <p className="text-xs uppercase font-bold tracking-wide mb-2">Payment History</p>
-                {paymentHistory.length === 0 ? (
-                  <p className="text-xs text-gray-500">No payments recorded yet.</p>
-                ) : (
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b-2 border-black">
-                        <th className="text-left py-1.5 font-semibold">Date</th>
-                        <th className="text-left py-1.5 font-semibold">Receipt No.</th>
-                        <th className="text-right py-1.5 font-semibold">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {paymentHistory.map((payment, idx) => (
-                        <tr key={`${payment.date}-${idx}`} className="border-b border-gray-300">
-                          <td className="py-1">{payment.date}</td>
-                          <td className="py-1 font-mono">{payment.reference}</td>
-                          <td className="py-1 text-right">₱{payment.amount.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              <p className="text-center text-xs text-gray-500 italic">
-                Please keep this statement for your records. Contact the school office for questions or corrections.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1764,6 +1818,30 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
       filteredPayments.map(p => [p.reference, p.date, p.time, p.student, p.studentId, p.amount, p.cashier])
     );
   };
+
+  // Payment Receipt — dedicated page (replaces the old "Print Receipt" modal).
+  if (receiptPayment) {
+    return (
+      <ReceiptPage
+        studentName={receiptPayment.student}
+        studentId={receiptPayment.studentId}
+        grade={receiptPayment.grade}
+        reference={receiptPayment.reference}
+        amount={parseFloat(receiptPayment.amount)}
+        method={receiptPayment.method}
+        dateLabel={new Date(`${receiptPayment.date} ${receiptPayment.time}`).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })}
+        balanceBefore={receiptPayment.balance}
+        schoolYear={schoolYear}
+        onBack={() => setReceiptPayment(null)}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -1858,27 +1936,6 @@ function PaymentHistory({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { sc
         </div>
       </div>
 
-      {/* Receipt Modal (Print action) */}
-      {receiptPayment && (
-        <ReceiptModal
-          studentName={receiptPayment.student}
-          studentId={receiptPayment.studentId}
-          grade={receiptPayment.grade}
-          reference={receiptPayment.reference}
-          amount={parseFloat(receiptPayment.amount)}
-          method={receiptPayment.method}
-          dateLabel={new Date(`${receiptPayment.date} ${receiptPayment.time}`).toLocaleString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-          balanceBefore={receiptPayment.balance}
-          schoolYear={schoolYear}
-          onClose={() => setReceiptPayment(null)}
-        />
-      )}
     </div>
   );
 }

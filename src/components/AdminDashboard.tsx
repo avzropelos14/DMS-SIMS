@@ -53,6 +53,7 @@ import {
     List,
     RotateCcw,
     BookOpen,
+    ArrowLeft,
 } from "lucide-react";
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { supabase } from "./../supabase";
@@ -3327,7 +3328,13 @@ function StudentManagement({
         id: string;
         subject: string;
         teacher: string;
+        teacherId: string | null;
         schedule: string | null;
+        scheduleId: string | null;
+        days: string[];
+        startTime: string;
+        endTime: string;
+        room: string;
     };
     const [subjectAssessment, setSubjectAssessment] = useState<
         StudentSubjectAssessment[] | undefined
@@ -3336,105 +3343,347 @@ function StudentManagement({
         string | null
     >(null);
 
+    // Payment history — fetched fresh whenever the Student Details modal opens for a
+    // student, and kept live via a realtime subscription while the Payment History page
+    // is open so a payment processed elsewhere (e.g. Cashier) shows up immediately.
+    type StudentPaymentHistoryRow = {
+        id: string;
+        receiptNumber: string | null;
+        amount: number;
+        method: string | null;
+        category: string | null;
+        paidAt: string | null;
+    };
+    const PAYMENT_CATEGORY_LABELS: Record<string, string> = {
+        tuition: "Tuition Payment",
+        enrollment_fee: "Enrollment Fee",
+    };
+    const formatPaymentCategory = (category: string | null) => {
+        if (!category) return "Payment";
+        return (
+            PAYMENT_CATEGORY_LABELS[category] ??
+            category
+                .split("_")
+                .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                .join(" ")
+        );
+    };
+    const [showPaymentHistoryModal, setShowPaymentHistoryModal] =
+        useState(false);
+    const [paymentHistory, setPaymentHistory] = useState<
+        StudentPaymentHistoryRow[] | undefined
+    >(undefined);
+    const [paymentHistoryError, setPaymentHistoryError] = useState<
+        string | null
+    >(null);
+
+    useEffect(() => {
+        if (!showViewModal || !selectedStudent) {
+            setPaymentHistory(undefined);
+            setPaymentHistoryError(null);
+            return;
+        }
+        let cancelled = false;
+        const studentId = selectedStudent.id;
+        const fetchHistory = async () => {
+            const { data, error } = await supabase
+                .from("payments")
+                .select(
+                    "id, receipt_number, amount, method, category, paid_at",
+                )
+                .eq("student_id", studentId)
+                .order("paid_at", { ascending: false });
+            if (cancelled) return;
+            if (error) {
+                setPaymentHistoryError(error.message);
+                return;
+            }
+            setPaymentHistory(
+                (data ?? []).map((r: any) => ({
+                    id: r.id,
+                    receiptNumber: r.receipt_number,
+                    amount: Number(r.amount || 0),
+                    method: r.method,
+                    category: r.category,
+                    paidAt: r.paid_at,
+                })),
+            );
+        };
+        setPaymentHistory(undefined);
+        setPaymentHistoryError(null);
+        fetchHistory();
+
+        const channel = supabase
+            .channel(`payments-history-${studentId}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "payments",
+                    filter: `student_id=eq.${studentId}`,
+                },
+                () => fetchHistory(),
+            )
+            .subscribe();
+        return () => {
+            cancelled = true;
+            supabase.removeChannel(channel);
+        };
+    }, [showViewModal, selectedStudent]);
+
+    const [subjectAssessmentSchoolYearId, setSubjectAssessmentSchoolYearId] =
+        useState<string | null>(null);
+
+    const loadSubjectAssessment = async (
+        student: Student,
+        cancelledRef?: { current: boolean },
+    ) => {
+        setSubjectAssessmentError(null);
+        const { data: syRow } = await supabase
+            .from("school_years")
+            .select("id")
+            .eq("label", schoolYear)
+            .maybeSingle();
+        const syId = syRow?.id ?? null;
+        setSubjectAssessmentSchoolYearId(syId);
+        if (!syId) {
+            if (!cancelledRef?.current) setSubjectAssessment([]);
+            return;
+        }
+
+        const { data: sectionRow, error: sectionError } = await supabase
+            .from("class_sections")
+            .select("id")
+            .eq("school_year_id", syId)
+            .eq("grade_level", student.grade)
+            .eq("section_name", student.section)
+            .maybeSingle();
+        if (cancelledRef?.current) return;
+        if (sectionError) {
+            setSubjectAssessmentError(sectionError.message);
+            return;
+        }
+        if (!sectionRow) {
+            setSubjectAssessment([]);
+            return;
+        }
+
+        const [{ data: cssRows, error: cssError }, { data: scheduleRows }] =
+            await Promise.all([
+                supabase
+                    .from("class_section_subjects")
+                    .select(
+                        "id, archived, subjects(name), employees(id, full_name)",
+                    )
+                    .eq("class_section_id", sectionRow.id)
+                    .eq("archived", false),
+                supabase
+                    .from("schedules")
+                    .select("id, subject, days, time_label, room")
+                    .eq("school_year_id", syId)
+                    .eq("grade_level", student.grade)
+                    .eq("section_name", student.section),
+            ]);
+        if (cancelledRef?.current) return;
+        if (cssError) {
+            setSubjectAssessmentError(cssError.message);
+            return;
+        }
+
+        const scheduleRowFor = (subjectName: string) =>
+            (scheduleRows ?? []).find(
+                (s: any) =>
+                    (s.subject || "").trim().toLowerCase() ===
+                    subjectName.trim().toLowerCase(),
+            ) ?? null;
+
+        setSubjectAssessment(
+            (cssRows ?? [])
+                .map((r: any) => {
+                    const subjectName =
+                        r.subjects?.name ?? r.subjects?.[0]?.name ?? "";
+                    const employee = r.employees?.[0] ?? r.employees ?? null;
+                    const scheduleRow = scheduleRowFor(subjectName);
+                    const [startTime, endTime] = (
+                        scheduleRow?.time_label || ""
+                    ).split("-");
+                    const days = Array.isArray(scheduleRow?.days)
+                        ? scheduleRow.days.join("/")
+                        : "";
+                    return {
+                        id: r.id,
+                        subject: subjectName,
+                        teacher: employee?.full_name ?? "Unassigned",
+                        teacherId: employee?.id ?? null,
+                        schedule:
+                            [
+                                days,
+                                formatTimeLabel12hr(
+                                    scheduleRow?.time_label || "",
+                                ),
+                                scheduleRow?.room,
+                            ]
+                                .filter(Boolean)
+                                .join(" • ") || null,
+                        scheduleId: scheduleRow?.id ?? null,
+                        days: scheduleRow?.days ?? [],
+                        startTime: startTime || "",
+                        endTime: endTime || "",
+                        room: scheduleRow?.room || "",
+                    };
+                })
+                .sort((a, b) => a.subject.localeCompare(b.subject)),
+        );
+    };
+
     useEffect(() => {
         if (!showViewModal || !selectedStudent) {
             setSubjectAssessment(undefined);
             setSubjectAssessmentError(null);
             return;
         }
-        let cancelled = false;
         setSubjectAssessment(undefined);
-        setSubjectAssessmentError(null);
-        (async () => {
-            const { data: syRow } = await supabase
-                .from("school_years")
-                .select("id")
-                .eq("label", schoolYear)
-                .maybeSingle();
-            const syId = syRow?.id ?? null;
-            if (!syId) {
-                if (!cancelled) setSubjectAssessment([]);
-                return;
-            }
+        const cancelledRef = { current: false };
+        loadSubjectAssessment(selectedStudent, cancelledRef);
+        return () => {
+            cancelledRef.current = true;
+        };
+    }, [showViewModal, selectedStudent, schoolYear]);
 
-            const { data: sectionRow, error: sectionError } = await supabase
-                .from("class_sections")
-                .select("id")
-                .eq("school_year_id", syId)
-                .eq("grade_level", selectedStudent.grade)
-                .eq("section_name", selectedStudent.section)
-                .maybeSingle();
-            if (cancelled) return;
-            if (sectionError) {
-                setSubjectAssessmentError(sectionError.message);
-                return;
-            }
-            if (!sectionRow) {
-                setSubjectAssessment([]);
-                return;
-            }
-
-            const [{ data: cssRows, error: cssError }, { data: scheduleRows }] =
-                await Promise.all([
-                    supabase
-                        .from("class_section_subjects")
-                        .select(
-                            "id, archived, subjects(name), employees(full_name)",
-                        )
-                        .eq("class_section_id", sectionRow.id)
-                        .eq("archived", false),
-                    supabase
-                        .from("schedules")
-                        .select("subject, days, time_label, room")
-                        .eq("school_year_id", syId)
-                        .eq("grade_level", selectedStudent.grade)
-                        .eq("section_name", selectedStudent.section),
-                ]);
-            if (cancelled) return;
-            if (cssError) {
-                setSubjectAssessmentError(cssError.message);
-                return;
-            }
-
-            const scheduleFor = (subjectName: string) => {
-                const row = (scheduleRows ?? []).find(
-                    (s: any) =>
-                        (s.subject || "").trim().toLowerCase() ===
-                        subjectName.trim().toLowerCase(),
-                );
-                if (!row) return null;
-                const days = Array.isArray(row.days)
-                    ? row.days.join("/")
-                    : "";
-                return (
-                    [days, formatTimeLabel12hr(row.time_label), row.room]
-                        .filter(Boolean)
-                        .join(" • ") || null
-                );
-            };
-
-            setSubjectAssessment(
-                (cssRows ?? [])
-                    .map((r: any) => {
-                        const subjectName =
-                            r.subjects?.name ?? r.subjects?.[0]?.name ?? "";
-                        return {
-                            id: r.id,
-                            subject: subjectName,
-                            teacher:
-                                r.employees?.full_name ??
-                                r.employees?.[0]?.full_name ??
-                                "Unassigned",
-                            schedule: scheduleFor(subjectName),
-                        };
-                    })
-                    .sort((a, b) => a.subject.localeCompare(b.subject)),
-            );
-        })();
+    // Active teacher roster for the Subject Assessment page's teacher reassignment dropdown.
+    const [subjectAssessmentTeachers, setSubjectAssessmentTeachers] = useState<
+        { id: string; name: string }[]
+    >([]);
+    useEffect(() => {
+        if (!showSubjectAssessmentModal) return;
+        let cancelled = false;
+        supabase
+            .from("employees")
+            .select("id, full_name")
+            .eq("status", "active")
+            .eq("position", "Teacher")
+            .is("deleted_at", null)
+            .order("full_name")
+            .then(({ data }) => {
+                if (!cancelled)
+                    setSubjectAssessmentTeachers(
+                        (data ?? []).map((t: any) => ({
+                            id: t.id,
+                            name: t.full_name,
+                        })),
+                    );
+            });
         return () => {
             cancelled = true;
         };
-    }, [showViewModal, selectedStudent, schoolYear]);
+    }, [showSubjectAssessmentModal]);
+
+    const [subjectAssessmentRooms, setSubjectAssessmentRooms] = useState<
+        Room[]
+    >([]);
+    useEffect(() => {
+        if (!showSubjectAssessmentModal) return;
+        let cancelled = false;
+        listRooms()
+            .then((rows) => {
+                if (!cancelled) setSubjectAssessmentRooms(rows);
+            })
+            .catch(() => {
+                if (!cancelled) setSubjectAssessmentRooms([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [showSubjectAssessmentModal]);
+
+    const updateSubjectAssessmentRow = (
+        id: string,
+        patch: Partial<StudentSubjectAssessment>,
+    ) => {
+        setSubjectAssessment((rows) =>
+            rows?.map((r) => (r.id === id ? { ...r, ...patch } : r)),
+        );
+    };
+    const toggleSubjectAssessmentDay = (id: string, day: string) => {
+        setSubjectAssessment((rows) =>
+            rows?.map((r) =>
+                r.id === id
+                    ? {
+                          ...r,
+                          days: r.days.includes(day)
+                              ? r.days.filter((d) => d !== day)
+                              : [...r.days, day],
+                      }
+                    : r,
+            ),
+        );
+    };
+    const [savingSubjectRowId, setSavingSubjectRowId] = useState<
+        string | null
+    >(null);
+    const [subjectRowSaveError, setSubjectRowSaveError] = useState<
+        string | null
+    >(null);
+
+    const handleSaveSubjectAssessmentRow = async (
+        row: StudentSubjectAssessment,
+    ) => {
+        if (!selectedStudent) return;
+        setSavingSubjectRowId(row.id);
+        setSubjectRowSaveError(null);
+        try {
+            const { error: teacherErr } = await supabase
+                .from("class_section_subjects")
+                .update({ teacher_id: row.teacherId })
+                .eq("id", row.id);
+            if (teacherErr) throw teacherErr;
+
+            const teacherName =
+                subjectAssessmentTeachers.find((t) => t.id === row.teacherId)
+                    ?.name ?? row.teacher;
+            const hasSchedule =
+                row.days.length > 0 && !!row.startTime && !!row.endTime;
+            if (hasSchedule && subjectAssessmentSchoolYearId) {
+                const scheduleFields = {
+                    school_year_id: subjectAssessmentSchoolYearId,
+                    grade_level: selectedStudent.grade,
+                    section_name: selectedStudent.section,
+                    subject: row.subject,
+                    teacher: teacherName,
+                    days: row.days,
+                    time_label: `${row.startTime}-${row.endTime}`,
+                    room: row.room.trim() || null,
+                };
+                if (row.scheduleId) {
+                    const { error: schedErr } = await supabase
+                        .from("schedules")
+                        .update(scheduleFields)
+                        .eq("id", row.scheduleId);
+                    if (schedErr) throw schedErr;
+                } else {
+                    const { error: schedErr } = await supabase
+                        .from("schedules")
+                        .insert(scheduleFields);
+                    if (schedErr) throw schedErr;
+                }
+            } else if (row.scheduleId) {
+                const { error: schedErr } = await supabase
+                    .from("schedules")
+                    .delete()
+                    .eq("id", row.scheduleId);
+                if (schedErr) throw schedErr;
+            }
+
+            await loadSubjectAssessment(selectedStudent);
+        } catch (e: any) {
+            setSubjectRowSaveError(
+                e?.message || "Failed to save this subject's assignment.",
+            );
+        } finally {
+            setSavingSubjectRowId(null);
+        }
+    };
 
     const buildGuardianQRPayload = (
         student: Student,
@@ -3448,6 +3697,737 @@ function StudentManagement({
             studentId: student.id,
             studentName: student.name,
         });
+
+    // Subject Assessment — its own page (not a modal) so subjects/teacher/schedule can be
+    // edited inline, with every save immediately reflected here and in the Student Details view.
+    if (showSubjectAssessmentModal && selectedStudent) {
+        return (
+            <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                        <button
+                            onClick={() =>
+                                setShowSubjectAssessmentModal(false)
+                            }
+                            className="flex items-center gap-1.5 text-base font-medium text-[#1a2b4a] hover:underline mb-2"
+                        >
+                            <ChevronDown className="w-5 h-5 rotate-90" />
+                            Back to Student Management
+                        </button>
+                        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                            Subject Assessment
+                        </h1>
+                        <p className="text-[#6b6456]">
+                            {selectedStudent.name} • {selectedStudent.grade}
+                            {selectedStudent.section
+                                ? ` - ${selectedStudent.section}`
+                                : ""}
+                        </p>
+                    </div>
+                    <button
+                        onClick={async () => {
+                            const rows = (subjectAssessment ?? [])
+                                .map(
+                                    (s) => `
+                        <tr>
+                          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.subject}</td>
+                          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.teacher}</td>
+                          <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.schedule || "No schedule set"}</td>
+                        </tr>`,
+                                )
+                                .join("");
+                            const [logoDataUrl, schoolInfo] =
+                                await Promise.all([
+                                    getSchoolLogoDataUrl(),
+                                    getSchoolSettings(),
+                                ]);
+                            const win = window.open("", "_blank");
+                            if (!win) return;
+                            win.document.write(`
+                      <html>
+                        <head>
+                          <title>Subject Assessment — ${selectedStudent.name}</title>
+                          <style>
+                            body { font-family: Arial, sans-serif; color: #2c2c2c; padding: 24px; }
+                            .school-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #1a2b4a; padding-bottom: 12px; margin-bottom: 16px; }
+                            .school-header img { width: 56px; height: 56px; object-fit: contain; }
+                            .school-header h2 { font-size: 16px; margin: 0; color: #1a2b4a; }
+                            .school-header p { font-size: 11px; color: #6b6456; margin: 2px 0 0; }
+                            h1 { font-size: 18px; margin-bottom: 4px; }
+                            p { font-size: 13px; color: #6b6456; margin-top: 0; }
+                            table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+                            th { text-align: left; padding: 8px; background: #f3f4f6; }
+                          </style>
+                        </head>
+                        <body>
+                          <div class="school-header">
+                            <img src="${logoDataUrl}" alt="School logo" />
+                            <div>
+                              <h2>${schoolInfo.school_name.toUpperCase()}</h2>
+                              ${schoolInfo.school_address ? `<p>${schoolInfo.school_address}</p>` : ""}
+                            </div>
+                          </div>
+                          <h1>Subject Assessment</h1>
+                          <p>${selectedStudent.name} • ${selectedStudent.grade}${selectedStudent.section ? ` - ${selectedStudent.section}` : ""}</p>
+                          <table>
+                            <thead>
+                              <tr><th>Subject</th><th>Teacher</th><th>Schedule</th></tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                          </table>
+                        </body>
+                      </html>
+                    `);
+                            win.document.close();
+                            win.focus();
+                            win.print();
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all self-start"
+                    >
+                        <Printer className="w-3.5 h-3.5" />
+                        Print
+                    </button>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    {subjectRowSaveError && (
+                        <div className="flex items-center gap-2 p-3 mb-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                            <AlertCircle className="w-4 h-4 shrink-0" />{" "}
+                            {subjectRowSaveError}
+                        </div>
+                    )}
+                    {subjectAssessment === undefined ? (
+                        <p className="text-sm text-[#8b8476]">
+                            Loading subjects…
+                        </p>
+                    ) : subjectAssessmentError ? (
+                        <p className="text-sm text-red-500">
+                            {subjectAssessmentError}
+                        </p>
+                    ) : subjectAssessment.length === 0 ? (
+                        <p className="text-sm text-[#8b8476]">
+                            No subjects are assigned to{" "}
+                            {selectedStudent.grade}
+                            {selectedStudent.section
+                                ? ` - ${selectedStudent.section}`
+                                : ""}{" "}
+                            yet.
+                        </p>
+                    ) : (
+                        <div className="divide-y divide-gray-100">
+                            {subjectAssessment.map((s) => (
+                                <div key={s.id} className="py-5 first:pt-0">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                                        <h3 className="font-semibold text-[#1a2b4a] text-sm">
+                                            {s.subject}
+                                        </h3>
+                                        <button
+                                            onClick={() =>
+                                                handleSaveSubjectAssessmentRow(
+                                                    s,
+                                                )
+                                            }
+                                            disabled={
+                                                savingSubjectRowId === s.id
+                                            }
+                                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white hover:shadow-lg transition-all disabled:opacity-60"
+                                        >
+                                            {savingSubjectRowId === s.id
+                                                ? "Saving…"
+                                                : "Save"}
+                                        </button>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                        <div>
+                                            <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                Teacher
+                                            </label>
+                                            <select
+                                                value={s.teacherId ?? ""}
+                                                onChange={(e) =>
+                                                    updateSubjectAssessmentRow(
+                                                        s.id,
+                                                        {
+                                                            teacherId:
+                                                                e.target
+                                                                    .value ||
+                                                                null,
+                                                        },
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                            >
+                                                <option value="">
+                                                    Unassigned
+                                                </option>
+                                                {subjectAssessmentTeachers.map(
+                                                    (t) => (
+                                                        <option
+                                                            key={t.id}
+                                                            value={t.id}
+                                                        >
+                                                            {t.name}
+                                                        </option>
+                                                    ),
+                                                )}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                Start Time
+                                            </label>
+                                            <input
+                                                type="time"
+                                                value={s.startTime}
+                                                onChange={(e) =>
+                                                    updateSubjectAssessmentRow(
+                                                        s.id,
+                                                        {
+                                                            startTime:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                End Time
+                                            </label>
+                                            <input
+                                                type="time"
+                                                value={s.endTime}
+                                                onChange={(e) =>
+                                                    updateSubjectAssessmentRow(
+                                                        s.id,
+                                                        {
+                                                            endTime:
+                                                                e.target
+                                                                    .value,
+                                                        },
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                Room
+                                            </label>
+                                            <select
+                                                value={s.room}
+                                                onChange={(e) =>
+                                                    updateSubjectAssessmentRow(
+                                                        s.id,
+                                                        {
+                                                            room: e.target
+                                                                .value,
+                                                        },
+                                                    )
+                                                }
+                                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                            >
+                                                <option value="">
+                                                    Select a room…
+                                                </option>
+                                                {subjectAssessmentRooms.map(
+                                                    (r) => (
+                                                        <option
+                                                            key={r.id}
+                                                            value={r.name}
+                                                        >
+                                                            {r.name}
+                                                        </option>
+                                                    ),
+                                                )}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 mt-3 flex-wrap">
+                                        <span className="text-xs font-medium text-[#6b6456] mr-1">
+                                            Days:
+                                        </span>
+                                        {WEEK_DAYS.map((day) => (
+                                            <button
+                                                key={day}
+                                                type="button"
+                                                onClick={() =>
+                                                    toggleSubjectAssessmentDay(
+                                                        s.id,
+                                                        day,
+                                                    )
+                                                }
+                                                className={`px-2.5 py-1 rounded-full text-xs font-semibold border-2 transition-all ${
+                                                    s.days.includes(day)
+                                                        ? "bg-[#1a2b4a] border-[#1a2b4a] text-white"
+                                                        : "border-gray-200 text-[#6b6456] hover:border-[#1a2b4a]/30"
+                                                }`}
+                                            >
+                                                {day}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+    if (
+        showPaymentHistoryModal &&
+        selectedStudent &&
+        paymentHistory !== undefined
+    ) {
+        return (
+                    <div className="space-y-6">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                                <button
+                                    onClick={() =>
+                                        setShowPaymentHistoryModal(false)
+                                    }
+                                    className="flex items-center gap-1.5 text-base font-medium text-[#1a2b4a] hover:underline mb-2"
+                                >
+                                    <ChevronDown className="w-5 h-5 rotate-90" />
+                                    Back to Student Details
+                                </button>
+                                <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                                    Payment History
+                                </h1>
+                                <p className="text-[#6b6456]">
+                                    {selectedStudent.name} •{" "}
+                                    {selectedStudent.grade}
+                                    {selectedStudent.section
+                                        ? ` - ${selectedStudent.section}`
+                                        : ""}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="max-w-2xl mx-auto">
+                            {paymentHistoryError ? (
+                                <p className="text-sm text-red-500">
+                                    {paymentHistoryError}
+                                </p>
+                            ) : paymentHistory.length === 0 ? (
+                                <p className="text-sm text-[#8b8476]">
+                                    No payments recorded for{" "}
+                                    {selectedStudent.name} yet.
+                                </p>
+                            ) : (
+                                <>
+                                    <div className="mb-4 p-3 bg-white border border-gray-200 rounded-lg flex items-center justify-between text-sm">
+                                        <span className="text-[#8b8476]">
+                                            Total Paid
+                                        </span>
+                                        <span className="font-bold text-[#1a2b4a]">
+                                            ₱
+                                            {paymentHistory
+                                                .reduce(
+                                                    (sum, p) => sum + p.amount,
+                                                    0,
+                                                )
+                                                .toLocaleString(undefined, {
+                                                    minimumFractionDigits: 2,
+                                                    maximumFractionDigits: 2,
+                                                })}
+                                        </span>
+                                    </div>
+                                    <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100 px-4">
+                                        {paymentHistory.map((p) => (
+                                            <div
+                                                key={p.id}
+                                                className="py-3 flex items-center justify-between gap-3 flex-wrap"
+                                            >
+                                                <div>
+                                                    <p className="font-medium text-[#2c2c2c] text-sm">
+                                                        {formatPaymentCategory(
+                                                            p.category,
+                                                        )}
+                                                    </p>
+                                                    <p className="text-xs text-[#8b8476]">
+                                                        {p.receiptNumber
+                                                            ? `OR #${p.receiptNumber} • `
+                                                            : ""}
+                                                        {p.method || "—"}
+                                                        {p.paidAt
+                                                            ? ` • ${new Date(p.paidAt).toLocaleDateString()}`
+                                                            : ""}
+                                                    </p>
+                                                </div>
+                                                <p className="text-sm font-semibold text-[#1a2b4a]">
+                                                    ₱
+                                                    {p.amount.toLocaleString(
+                                                        undefined,
+                                                        {
+                                                            minimumFractionDigits: 2,
+                                                            maximumFractionDigits: 2,
+                                                        },
+                                                    )}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+        );
+    }
+
+    if (showViewModal && selectedStudent) {
+        return (
+                <div className="space-y-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                            <button
+                                onClick={() => setShowViewModal(false)}
+                                className="flex items-center gap-1.5 text-base font-medium text-[#1a2b4a] hover:underline mb-2"
+                            >
+                                <ChevronDown className="w-5 h-5 rotate-90" />
+                                Back to Student Management
+                            </button>
+                            <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                                Student Details
+                            </h1>
+                        </div>
+                    </div>
+                    <div className="max-w-2xl mx-auto space-y-5">
+                            <div className="flex items-start gap-5 pb-5 border-b border-gray-200">
+                                <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
+                                    {selectedStudent.name
+                                        .split(" ")
+                                        .map((n: string) => n[0])
+                                        .join("")}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <h3 className="text-xl font-bold text-[#1a2b4a]">
+                                        {formatFamilyNameFirst(
+                                            selectedStudent.name,
+                                            selectedStudent.suffix,
+                                        )}
+                                    </h3>
+                                    <p className="text-sm text-[#8b8476] font-mono">
+                                        {selectedStudent.id}
+                                    </p>
+                                    <p className="text-sm text-[#6b6456] truncate">
+                                        {selectedStudent.email}
+                                    </p>
+                                    <span
+                                        className={`mt-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${tabConfig[selectedStudent.status].color}`}
+                                    >
+                                        {selectedStudent.status}
+                                    </span>
+                                    {selectedStudent.isTransferee && (
+                                        <span className="mt-2 ml-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+                                            Transferee
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 gap-3">
+                                <div className="p-3 bg-[#faf8f5] rounded-lg text-center">
+                                    <p className="text-xs text-[#8b8476] mb-1">
+                                        Grade
+                                    </p>
+                                    <p className="font-bold text-[#1a2b4a]">
+                                        {selectedStudent.grade}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                                <strong>Enrolled:</strong>{" "}
+                                {selectedStudent.enrolled} &nbsp;&bull;&nbsp;{" "}
+                                <strong>Phone:</strong> {selectedStudent.phone}
+                                {selectedStudent.isTransferee &&
+                                    selectedStudent.transferDate && (
+                                        <>
+                                            {" "}
+                                            &nbsp;&bull;&nbsp;{" "}
+                                            <strong>
+                                                Transferred In:
+                                            </strong>{" "}
+                                            {selectedStudent.transferDate}
+                                        </>
+                                    )}
+                            </div>
+
+                            {/* Subject Assessment — subjects assigned to the student's class
+                          section, their teachers, and schedule; reflects Class Management /
+                          Schedule edits made since the modal was opened. Full details live in
+                          a dedicated modal (opened via "View") to save space here. */}
+                            <div className="border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                    <BookOpen className="w-5 h-5 text-[#1a2b4a]" />
+                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
+                                        Subject Assessment
+                                    </h3>
+                                    {subjectAssessment !== undefined && (
+                                        <span className="text-xs text-[#8b8476]">
+                                            ({subjectAssessment.length}{" "}
+                                            subject
+                                            {subjectAssessment.length === 1
+                                                ? ""
+                                                : "s"}
+                                            )
+                                        </span>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={() =>
+                                        setShowSubjectAssessmentModal(true)
+                                    }
+                                    disabled={
+                                        subjectAssessment === undefined ||
+                                        !!subjectAssessmentError
+                                    }
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    View
+                                </button>
+                            </div>
+
+                            {/* Payment History — full record of the student's payments */}
+                            <div className="border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                    <Receipt className="w-5 h-5 text-[#1a2b4a]" />
+                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
+                                        Payment History
+                                    </h3>
+                                    {paymentHistory !== undefined && (
+                                        <span className="text-xs text-[#8b8476]">
+                                            ({paymentHistory.length} payment
+                                            {paymentHistory.length === 1
+                                                ? ""
+                                                : "s"}
+                                            )
+                                        </span>
+                                    )}
+                                </div>
+                                <button
+                                    onClick={() =>
+                                        setShowPaymentHistoryModal(true)
+                                    }
+                                    disabled={
+                                        paymentHistory === undefined ||
+                                        !!paymentHistoryError
+                                    }
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    View
+                                </button>
+                            </div>
+
+                            {/* Parent/Guardian QR Authentication Pass */}
+                            <div className="border-2 border-[#c9a961]/40 rounded-xl p-5 bg-[#fdf9f0]">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <QrCode className="w-5 h-5 text-[#c9a961]" />
+                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
+                                        Parent/Guardian QR Authentication Pass
+                                    </h3>
+                                </div>
+                                {primaryGuardian === undefined ? (
+                                    <p className="text-sm text-[#8b8476]">
+                                        Loading linked guardian…
+                                    </p>
+                                ) : primaryGuardian === null ? (
+                                    <p className="text-sm text-[#8b8476]">
+                                        No guardian is linked to this student
+                                        yet in Student Guardians, so a pickup QR
+                                        can't be issued here. Ask the parent to
+                                        generate one from their Parent Portal
+                                        Pickup screen once they're linked, or
+                                        link a guardian first.
+                                    </p>
+                                ) : (
+                                    <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+                                        <div
+                                            id={`guardian-qr-${selectedStudent.id}`}
+                                            className="p-3 bg-white rounded-lg border border-gray-200 shrink-0"
+                                        >
+                                            <QRCodeSVG
+                                                value={buildGuardianQRPayload(
+                                                    selectedStudent,
+                                                    primaryGuardian,
+                                                )}
+                                                size={128}
+                                                level="M"
+                                                includeMargin={false}
+                                            />
+                                        </div>
+                                        <div className="flex-1 min-w-0 space-y-1.5 text-sm">
+                                            <p>
+                                                <span className="text-[#8b8476]">
+                                                    Authorized Guardian:
+                                                </span>{" "}
+                                                <span className="font-semibold text-[#2c2c2c]">
+                                                    {primaryGuardian.name}
+                                                </span>
+                                            </p>
+                                            <p>
+                                                <span className="text-[#8b8476]">
+                                                    Relationship:
+                                                </span>{" "}
+                                                <span className="font-medium text-[#2c2c2c]">
+                                                    {
+                                                        primaryGuardian.relationship
+                                                    }
+                                                </span>
+                                            </p>
+                                            <p className="text-xs text-[#8b8476] pt-1">
+                                                Present this QR code at
+                                                dismissal. Security personnel
+                                                will scan it to verify the
+                                                guardian's identity before
+                                                releasing{" "}
+                                                {
+                                                    selectedStudent.name.split(
+                                                        " ",
+                                                    )[0]
+                                                }
+                                                .
+                                            </p>
+                                            <button
+                                                onClick={() => window.print()}
+                                                className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
+                                            >
+                                                <Printer className="w-3.5 h-3.5" />{" "}
+                                                Print Pass
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex gap-3 pt-2 border-t border-gray-200">
+                                <button
+                                    onClick={() => {
+                                        setShowViewModal(false);
+                                        setShowEditModal(true);
+                                    }}
+                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm"
+                                >
+                                    Edit
+                                </button>
+                                <button
+                                    onClick={() =>
+                                        openStatusChange(selectedStudent)
+                                    }
+                                    className="flex-1 px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg font-medium hover:bg-blue-50 transition-all text-sm"
+                                >
+                                    Change Status
+                                </button>
+                                <button
+                                    onClick={() => setShowViewModal(false)}
+                                    className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm"
+                                >
+                                    Back
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+        );
+    }
+
+    if (showEditModal && selectedStudent) {
+        return (
+                <StudentEditModal
+                    student={selectedStudent}
+                    gradeOptions={GRADE_OPTIONS.filter((g) => g !== "All")}
+                    sectionOptionsForGrade={sectionOptionsForGrade}
+                    saving={savingEdit}
+                    error={editError}
+                    schoolYear={schoolYear}
+                    isRegistrar={isRegistrar}
+                    onCancel={() => {
+                        setShowEditModal(false);
+                        setEditError(null);
+                    }}
+                    onChangeStatus={() => {
+                        setShowEditModal(false);
+                        setEditError(null);
+                        openStatusChange(selectedStudent);
+                    }}
+                    onSave={async (form) => {
+                        setSavingEdit(true);
+                        setEditError(null);
+                        const { error } = await supabase
+                            .from("students")
+                            .update({
+                                first_name: form.firstName.trim(),
+                                middle_name: form.middleName.trim() || null,
+                                last_name: form.lastName.trim(),
+                                suffix: form.suffix || null,
+                                email: isRegistrar
+                                    ? selectedStudent.email || null
+                                    : form.email || null,
+                                phone: form.phone || null,
+                                grade_level: form.grade,
+                                section: form.section || null,
+                            })
+                            .eq("id", selectedStudent.id);
+                        if (error) {
+                            setSavingEdit(false);
+                            setEditError(error.message);
+                            return;
+                        }
+                        try {
+                            const sy = await getSchoolYearByLabel(schoolYear);
+                            if (sy) {
+                                await syncEnrollmentGradeSection(
+                                    selectedStudent.id,
+                                    sy.id,
+                                    form.grade,
+                                    form.section || null,
+                                );
+                            }
+                        } catch (e: any) {
+                            setSavingEdit(false);
+                            setEditError(
+                                e?.message ||
+                                    "Failed to update the student's class roster.",
+                            );
+                            return;
+                        }
+                        setSavingEdit(false);
+                        const name =
+                            [
+                                form.firstName.trim(),
+                                form.middleName.trim(),
+                                form.lastName.trim(),
+                            ]
+                                .filter(Boolean)
+                                .join(" ") +
+                            (form.suffix ? ` ${form.suffix}` : "");
+                        setStudents((prev) =>
+                            prev.map((s) =>
+                                s.id === selectedStudent.id
+                                    ? {
+                                          ...s,
+                                          name,
+                                          firstName: form.firstName.trim(),
+                                          middleName: form.middleName.trim(),
+                                          lastName: form.lastName.trim(),
+                                          suffix: form.suffix,
+                                          email: form.email,
+                                          phone: form.phone,
+                                          grade: form.grade,
+                                          section: form.section,
+                                      }
+                                    : s,
+                            ),
+                        );
+                        setShowEditModal(false);
+                    }}
+                />
+        );
+    }
+
 
     return (
         <div className="space-y-6">
@@ -3665,458 +4645,6 @@ function StudentManagement({
                 </div>
             </div>
 
-            {/* View Student Modal */}
-            {showViewModal && selectedStudent && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <h2 className="text-lg font-semibold">
-                                    Student Details
-                                </h2>
-                            </div>
-                            {/* <button onClick={() => setShowViewModal(false)} className="p-1 hover:bg-white/20 rounded-lg transition-colors"><X className="w-5 h-5" /></button> */}
-                        </div>
-                        <div className="p-6 space-y-5">
-                            <div className="flex items-start gap-5 pb-5 border-b border-gray-200">
-                                <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
-                                    {selectedStudent.name
-                                        .split(" ")
-                                        .map((n: string) => n[0])
-                                        .join("")}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <h3 className="text-xl font-bold text-[#1a2b4a]">
-                                        {formatFamilyNameFirst(
-                                            selectedStudent.name,
-                                            selectedStudent.suffix,
-                                        )}
-                                    </h3>
-                                    <p className="text-sm text-[#8b8476] font-mono">
-                                        {selectedStudent.id}
-                                    </p>
-                                    <p className="text-sm text-[#6b6456] truncate">
-                                        {selectedStudent.email}
-                                    </p>
-                                    <span
-                                        className={`mt-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold ${tabConfig[selectedStudent.status].color}`}
-                                    >
-                                        {selectedStudent.status}
-                                    </span>
-                                    {selectedStudent.isTransferee && (
-                                        <span className="mt-2 ml-2 inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
-                                            Transferee
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-1 gap-3">
-                                <div className="p-3 bg-[#faf8f5] rounded-lg text-center">
-                                    <p className="text-xs text-[#8b8476] mb-1">
-                                        Grade
-                                    </p>
-                                    <p className="font-bold text-[#1a2b4a]">
-                                        {selectedStudent.grade}
-                                    </p>
-                                </div>
-                            </div>
-                            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-                                <strong>Enrolled:</strong>{" "}
-                                {selectedStudent.enrolled} &nbsp;&bull;&nbsp;{" "}
-                                <strong>Phone:</strong> {selectedStudent.phone}
-                                {selectedStudent.isTransferee &&
-                                    selectedStudent.transferDate && (
-                                        <>
-                                            {" "}
-                                            &nbsp;&bull;&nbsp;{" "}
-                                            <strong>
-                                                Transferred In:
-                                            </strong>{" "}
-                                            {selectedStudent.transferDate}
-                                        </>
-                                    )}
-                            </div>
-
-                            {/* Subject Assessment — subjects assigned to the student's class
-                          section, their teachers, and schedule; reflects Class Management /
-                          Schedule edits made since the modal was opened. Full details live in
-                          a dedicated modal (opened via "View") to save space here. */}
-                            <div className="border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
-                                <div className="flex items-center gap-2">
-                                    <BookOpen className="w-5 h-5 text-[#1a2b4a]" />
-                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
-                                        Subject Assessment
-                                    </h3>
-                                    {subjectAssessment !== undefined && (
-                                        <span className="text-xs text-[#8b8476]">
-                                            ({subjectAssessment.length}{" "}
-                                            subject
-                                            {subjectAssessment.length === 1
-                                                ? ""
-                                                : "s"}
-                                            )
-                                        </span>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={() =>
-                                        setShowSubjectAssessmentModal(true)
-                                    }
-                                    disabled={
-                                        subjectAssessment === undefined ||
-                                        !!subjectAssessmentError
-                                    }
-                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                    <Eye className="w-3.5 h-3.5" />
-                                    View
-                                </button>
-                            </div>
-
-                            {/* Parent/Guardian QR Authentication Pass */}
-                            <div className="border-2 border-[#c9a961]/40 rounded-xl p-5 bg-[#fdf9f0]">
-                                <div className="flex items-center gap-2 mb-4">
-                                    <QrCode className="w-5 h-5 text-[#c9a961]" />
-                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
-                                        Parent/Guardian QR Authentication Pass
-                                    </h3>
-                                </div>
-                                {primaryGuardian === undefined ? (
-                                    <p className="text-sm text-[#8b8476]">
-                                        Loading linked guardian…
-                                    </p>
-                                ) : primaryGuardian === null ? (
-                                    <p className="text-sm text-[#8b8476]">
-                                        No guardian is linked to this student
-                                        yet in Student Guardians, so a pickup QR
-                                        can't be issued here. Ask the parent to
-                                        generate one from their Parent Portal
-                                        Pickup screen once they're linked, or
-                                        link a guardian first.
-                                    </p>
-                                ) : (
-                                    <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
-                                        <div
-                                            id={`guardian-qr-${selectedStudent.id}`}
-                                            className="p-3 bg-white rounded-lg border border-gray-200 shrink-0"
-                                        >
-                                            <QRCodeSVG
-                                                value={buildGuardianQRPayload(
-                                                    selectedStudent,
-                                                    primaryGuardian,
-                                                )}
-                                                size={128}
-                                                level="M"
-                                                includeMargin={false}
-                                            />
-                                        </div>
-                                        <div className="flex-1 min-w-0 space-y-1.5 text-sm">
-                                            <p>
-                                                <span className="text-[#8b8476]">
-                                                    Authorized Guardian:
-                                                </span>{" "}
-                                                <span className="font-semibold text-[#2c2c2c]">
-                                                    {primaryGuardian.name}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                <span className="text-[#8b8476]">
-                                                    Relationship:
-                                                </span>{" "}
-                                                <span className="font-medium text-[#2c2c2c]">
-                                                    {
-                                                        primaryGuardian.relationship
-                                                    }
-                                                </span>
-                                            </p>
-                                            <p className="text-xs text-[#8b8476] pt-1">
-                                                Present this QR code at
-                                                dismissal. Security personnel
-                                                will scan it to verify the
-                                                guardian's identity before
-                                                releasing{" "}
-                                                {
-                                                    selectedStudent.name.split(
-                                                        " ",
-                                                    )[0]
-                                                }
-                                                .
-                                            </p>
-                                            <button
-                                                onClick={() => window.print()}
-                                                className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
-                                            >
-                                                <Printer className="w-3.5 h-3.5" />{" "}
-                                                Print Pass
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex gap-3 pt-2 border-t border-gray-200">
-                                <button
-                                    onClick={() => {
-                                        setShowViewModal(false);
-                                        setShowEditModal(true);
-                                    }}
-                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm"
-                                >
-                                    Edit
-                                </button>
-                                <button
-                                    onClick={() =>
-                                        openStatusChange(selectedStudent)
-                                    }
-                                    className="flex-1 px-4 py-2.5 border-2 border-blue-300 text-blue-700 rounded-lg font-medium hover:bg-blue-50 transition-all text-sm"
-                                >
-                                    Change Status
-                                </button>
-                                <button
-                                    onClick={() => setShowViewModal(false)}
-                                    className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Subject Assessment Modal — full subject/teacher/schedule details, opened via
-          the "View" button on the Student Details modal, with a Print action. */}
-            {showSubjectAssessmentModal &&
-                selectedStudent &&
-                subjectAssessment !== undefined && (
-                    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                        <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[85vh] overflow-y-auto scrollbar-none">
-                            <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <BookOpen className="w-5 h-5" />
-                                    <div>
-                                        <h2 className="text-lg font-semibold">
-                                            Subject Assessment
-                                        </h2>
-                                        <p className="text-xs text-white/80">
-                                            {selectedStudent.name} •{" "}
-                                            {selectedStudent.grade}
-                                            {selectedStudent.section
-                                                ? ` - ${selectedStudent.section}`
-                                                : ""}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={async () => {
-                                            const rows = subjectAssessment
-                                                .map(
-                                                    (s) => `
-                                <tr>
-                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.subject}</td>
-                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.teacher}</td>
-                                  <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${s.schedule || "No schedule set"}</td>
-                                </tr>`,
-                                                )
-                                                .join("");
-                                            const [logoDataUrl, schoolInfo] =
-                                                await Promise.all([
-                                                    getSchoolLogoDataUrl(),
-                                                    getSchoolSettings(),
-                                                ]);
-                                            const win = window.open(
-                                                "",
-                                                "_blank",
-                                            );
-                                            if (!win) return;
-                                            win.document.write(`
-                              <html>
-                                <head>
-                                  <title>Subject Assessment — ${selectedStudent.name}</title>
-                                  <style>
-                                    body { font-family: Arial, sans-serif; color: #2c2c2c; padding: 24px; }
-                                    .school-header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #1a2b4a; padding-bottom: 12px; margin-bottom: 16px; }
-                                    .school-header img { width: 56px; height: 56px; object-fit: contain; }
-                                    .school-header h2 { font-size: 16px; margin: 0; color: #1a2b4a; }
-                                    .school-header p { font-size: 11px; color: #6b6456; margin: 2px 0 0; }
-                                    h1 { font-size: 18px; margin-bottom: 4px; }
-                                    p { font-size: 13px; color: #6b6456; margin-top: 0; }
-                                    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
-                                    th { text-align: left; padding: 8px; background: #f3f4f6; }
-                                  </style>
-                                </head>
-                                <body>
-                                  <div class="school-header">
-                                    <img src="${logoDataUrl}" alt="School logo" />
-                                    <div>
-                                      <h2>${schoolInfo.school_name.toUpperCase()}</h2>
-                                      ${schoolInfo.school_address ? `<p>${schoolInfo.school_address}</p>` : ""}
-                                    </div>
-                                  </div>
-                                  <h1>Subject Assessment</h1>
-                                  <p>${selectedStudent.name} • ${selectedStudent.grade}${selectedStudent.section ? ` - ${selectedStudent.section}` : ""}</p>
-                                  <table>
-                                    <thead>
-                                      <tr><th>Subject</th><th>Teacher</th><th>Schedule</th></tr>
-                                    </thead>
-                                    <tbody>${rows}</tbody>
-                                  </table>
-                                </body>
-                              </html>
-                            `);
-                                            win.document.close();
-                                            win.focus();
-                                            win.print();
-                                        }}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 transition-colors"
-                                    >
-                                        <Printer className="w-3.5 h-3.5" />
-                                        Print
-                                    </button>
-                                    <button
-                                        onClick={() =>
-                                            setShowSubjectAssessmentModal(
-                                                false,
-                                            )
-                                        }
-                                        className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                                    >
-                                        <X className="w-5 h-5" />
-                                    </button>
-                                </div>
-                            </div>
-                            <div className="p-6">
-                                {subjectAssessment.length === 0 ? (
-                                    <p className="text-sm text-[#8b8476]">
-                                        No subjects are assigned to{" "}
-                                        {selectedStudent.grade}
-                                        {selectedStudent.section
-                                            ? ` - ${selectedStudent.section}`
-                                            : ""}{" "}
-                                        yet.
-                                    </p>
-                                ) : (
-                                    <div className="divide-y divide-gray-100">
-                                        {subjectAssessment.map((s) => (
-                                            <div
-                                                key={s.id}
-                                                className="py-3 flex items-center justify-between gap-3 flex-wrap"
-                                            >
-                                                <div>
-                                                    <p className="font-medium text-[#2c2c2c] text-sm">
-                                                        {s.subject}
-                                                    </p>
-                                                    <p className="text-xs text-[#8b8476]">
-                                                        {s.teacher}
-                                                    </p>
-                                                </div>
-                                                <p className="text-xs text-[#6b6456]">
-                                                    {s.schedule ||
-                                                        "No schedule set"}
-                                                </p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-            {/* Edit Modal */}
-            {showEditModal && selectedStudent && (
-                <StudentEditModal
-                    student={selectedStudent}
-                    gradeOptions={GRADE_OPTIONS.filter((g) => g !== "All")}
-                    sectionOptionsForGrade={sectionOptionsForGrade}
-                    saving={savingEdit}
-                    error={editError}
-                    schoolYear={schoolYear}
-                    isRegistrar={isRegistrar}
-                    onCancel={() => {
-                        setShowEditModal(false);
-                        setEditError(null);
-                    }}
-                    onChangeStatus={() => {
-                        setShowEditModal(false);
-                        setEditError(null);
-                        openStatusChange(selectedStudent);
-                    }}
-                    onSave={async (form) => {
-                        setSavingEdit(true);
-                        setEditError(null);
-                        const { error } = await supabase
-                            .from("students")
-                            .update({
-                                first_name: form.firstName.trim(),
-                                middle_name: form.middleName.trim() || null,
-                                last_name: form.lastName.trim(),
-                                suffix: form.suffix || null,
-                                email: isRegistrar
-                                    ? selectedStudent.email || null
-                                    : form.email || null,
-                                phone: form.phone || null,
-                                grade_level: form.grade,
-                                section: form.section || null,
-                            })
-                            .eq("id", selectedStudent.id);
-                        if (error) {
-                            setSavingEdit(false);
-                            setEditError(error.message);
-                            return;
-                        }
-                        try {
-                            const sy = await getSchoolYearByLabel(schoolYear);
-                            if (sy) {
-                                await syncEnrollmentGradeSection(
-                                    selectedStudent.id,
-                                    sy.id,
-                                    form.grade,
-                                    form.section || null,
-                                );
-                            }
-                        } catch (e: any) {
-                            setSavingEdit(false);
-                            setEditError(
-                                e?.message ||
-                                    "Failed to update the student's class roster.",
-                            );
-                            return;
-                        }
-                        setSavingEdit(false);
-                        const name =
-                            [
-                                form.firstName.trim(),
-                                form.middleName.trim(),
-                                form.lastName.trim(),
-                            ]
-                                .filter(Boolean)
-                                .join(" ") +
-                            (form.suffix ? ` ${form.suffix}` : "");
-                        setStudents((prev) =>
-                            prev.map((s) =>
-                                s.id === selectedStudent.id
-                                    ? {
-                                          ...s,
-                                          name,
-                                          firstName: form.firstName.trim(),
-                                          middleName: form.middleName.trim(),
-                                          lastName: form.lastName.trim(),
-                                          suffix: form.suffix,
-                                          email: form.email,
-                                          phone: form.phone,
-                                          grade: form.grade,
-                                          section: form.section,
-                                      }
-                                    : s,
-                            ),
-                        );
-                        setShowEditModal(false);
-                    }}
-                />
-            )}
-
             {/* Change Status Modal */}
             {showStatusModal && selectedStudent && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -4243,24 +4771,32 @@ function StudentEditModal({
     const sectionOptions = sectionOptionsForGrade(form.grade);
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
-                <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <Edit className="w-5 h-5" />
-                        <h2 className="text-lg font-semibold">Edit Student</h2>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={onChangeStatus}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-semibold transition-colors"
-                            title="Change Status"
-                        >
-                            <UserCheck className="w-3.5 h-3.5" /> Change Status
-                        </button>
-                    </div>
+        <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                    <button
+                        onClick={onCancel}
+                        className="flex items-center gap-1.5 text-base font-medium text-[#1a2b4a] hover:underline mb-2"
+                    >
+                        <ChevronDown className="w-5 h-5 rotate-90" />
+                        Back to Student Management
+                    </button>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Edit Student
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        {student.firstName} {student.lastName}
+                    </p>
                 </div>
-                <div className="p-6 space-y-4">
+                <button
+                    onClick={onChangeStatus}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border-2 border-gray-200 text-[#1a2b4a] rounded-lg text-xs font-semibold hover:border-[#1a2b4a]/30 transition-all"
+                    title="Change Status"
+                >
+                    <UserCheck className="w-3.5 h-3.5" /> Change Status
+                </button>
+            </div>
+            <div className="max-w-2xl mx-auto space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-[#6b6456] mb-1">
                             Student ID
@@ -4458,7 +4994,6 @@ function StudentEditModal({
                     </div>
                 </div>
             </div>
-        </div>
     );
 }
 
@@ -4619,6 +5154,105 @@ function TeachersListSection({ schoolYear }: { schoolYear: string }) {
 
     const selectedTeacher = teachers.find((t) => t.id === selectedTeacherId) || null;
 
+    if (selectedTeacher) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => {
+                        setSelectedTeacherId(null);
+                        setViewStudentsFor(null);
+                    }}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Teachers List</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        {selectedTeacher.name}
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Subjects assigned to this teacher and the students
+                        enrolled in each class • {schoolYear}
+                    </p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="divide-y divide-gray-200">
+                        {loadingAssignments ? (
+                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
+                                Loading assignments…
+                            </p>
+                        ) : assignmentsError ? (
+                            <p className="px-6 py-8 text-center text-sm text-red-500">
+                                {assignmentsError}
+                            </p>
+                        ) : assignments.length === 0 ? (
+                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
+                                This teacher isn't assigned to any subjects
+                                this school year.
+                            </p>
+                        ) : (
+                            assignments.map((a) => {
+                                const expanded = viewStudentsFor?.id === a.id;
+                                return (
+                                    <div key={a.id} className="px-6 py-4">
+                                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-sm font-medium text-[#2c2c2c]">
+                                                    {a.subject}
+                                                </span>
+                                                <span className="text-sm text-[#8b8476]">
+                                                    {a.grade} — {a.section}
+                                                </span>
+                                            </div>
+                                            <button
+                                                onClick={() =>
+                                                    setViewStudentsFor(
+                                                        expanded ? null : a,
+                                                    )
+                                                }
+                                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all shrink-0"
+                                            >
+                                                <Eye className="w-3.5 h-3.5" />
+                                                {expanded
+                                                    ? "Hide Students"
+                                                    : `View Students (${a.students.length})`}
+                                            </button>
+                                        </div>
+                                        {expanded && (
+                                            <div className="mt-3 bg-[#faf8f5] border border-gray-200 rounded-lg p-4">
+                                                {a.students.length === 0 ? (
+                                                    <p className="text-sm text-[#8b8476] italic">
+                                                        No students enrolled
+                                                        in this class yet.
+                                                    </p>
+                                                ) : (
+                                                    <ul className="divide-y divide-gray-200">
+                                                        {a.students.map(
+                                                            (s) => (
+                                                                <li
+                                                                    key={s.id}
+                                                                    className="text-sm text-[#2c2c2c] py-2"
+                                                                >
+                                                                    {s.name}
+                                                                </li>
+                                                            ),
+                                                        )}
+                                                    </ul>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             <div>
@@ -4629,144 +5263,45 @@ function TeachersListSection({ schoolYear }: { schoolYear: string }) {
                 </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1">
-                    <div className="p-4 border-b border-gray-200">
-                        <div className="relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
-                            <input
-                                type="text"
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                                placeholder="Search teachers..."
-                                className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 focus:border-transparent"
-                            />
-                        </div>
-                    </div>
-                    <div className="divide-y divide-gray-200 max-h-[32rem] overflow-y-auto">
-                        {loadingTeachers ? (
-                            <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
-                                Loading teachers…
-                            </p>
-                        ) : loadError ? (
-                            <p className="px-4 py-8 text-center text-sm text-red-500">
-                                {loadError}
-                            </p>
-                        ) : filteredTeachers.length === 0 ? (
-                            <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
-                                No teachers found.
-                            </p>
-                        ) : (
-                            filteredTeachers.map((t) => (
-                                <button
-                                    key={t.id}
-                                    onClick={() => setSelectedTeacherId(t.id)}
-                                    className={`w-full text-left px-4 py-3 text-sm transition-colors ${
-                                        selectedTeacherId === t.id
-                                            ? "bg-[#1a2b4a]/5 text-[#1a2b4a] font-semibold"
-                                            : "hover:bg-[#faf8f5] text-[#2c2c2c]"
-                                    }`}
-                                >
-                                    {t.name}
-                                </button>
-                            ))
-                        )}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="p-4 border-b border-gray-200">
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                        <input
+                            type="text"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search teachers..."
+                            className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 focus:border-transparent"
+                        />
                     </div>
                 </div>
-
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-2">
-                    <div className="px-6 py-4 border-b border-gray-200">
-                        <h3 className="font-semibold text-[#1a2b4a]">
-                            {selectedTeacher ? selectedTeacher.name : "Select a teacher"}
-                        </h3>
-                        <p className="text-xs text-[#8b8476] mt-1">
-                            {selectedTeacher
-                                ? "Subjects assigned to this teacher and the students enrolled in each class."
-                                : "Pick a teacher from the list to see their subjects and students."}
+                <div className="divide-y divide-gray-200 max-h-[32rem] overflow-y-auto">
+                    {loadingTeachers ? (
+                        <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
+                            Loading teachers…
                         </p>
-                    </div>
-                    <div className="divide-y divide-gray-200">
-                        {!selectedTeacher ? null : loadingAssignments ? (
-                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
-                                Loading assignments…
-                            </p>
-                        ) : assignmentsError ? (
-                            <p className="px-6 py-8 text-center text-sm text-red-500">
-                                {assignmentsError}
-                            </p>
-                        ) : assignments.length === 0 ? (
-                            <p className="px-6 py-8 text-center text-sm text-[#8b8476]">
-                                This teacher isn't assigned to any subjects this school year.
-                            </p>
-                        ) : (
-                            assignments.map((a) => (
-                                <div
-                                    key={a.id}
-                                    className="px-6 py-4 flex items-center justify-between gap-3 flex-wrap"
-                                >
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="text-sm font-medium text-[#2c2c2c]">
-                                            {a.subject}
-                                        </span>
-                                        <span className="text-sm text-[#8b8476]">
-                                            {a.grade} — {a.section}
-                                        </span>
-                                    </div>
-                                    <button
-                                        onClick={() => setViewStudentsFor(a)}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all shrink-0"
-                                    >
-                                        <Eye className="w-3.5 h-3.5" />
-                                        View Students ({a.students.length})
-                                    </button>
-                                </div>
-                            ))
-                        )}
-                    </div>
+                    ) : loadError ? (
+                        <p className="px-4 py-8 text-center text-sm text-red-500">
+                            {loadError}
+                        </p>
+                    ) : filteredTeachers.length === 0 ? (
+                        <p className="px-4 py-8 text-center text-sm text-[#8b8476]">
+                            No teachers found.
+                        </p>
+                    ) : (
+                        filteredTeachers.map((t) => (
+                            <button
+                                key={t.id}
+                                onClick={() => setSelectedTeacherId(t.id)}
+                                className="w-full text-left px-4 py-3 text-sm transition-colors hover:bg-[#faf8f5] text-[#2c2c2c]"
+                            >
+                                {t.name}
+                            </button>
+                        ))
+                    )}
                 </div>
             </div>
-
-            {viewStudentsFor && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div>
-                                <h3 className="text-base font-semibold">
-                                    {viewStudentsFor.subject}
-                                </h3>
-                                <p className="text-xs text-white/80 mt-0.5">
-                                    {viewStudentsFor.grade} —{" "}
-                                    {viewStudentsFor.section}
-                                </p>
-                            </div>
-                            <button
-                                onClick={() => setViewStudentsFor(null)}
-                                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6">
-                            {viewStudentsFor.students.length === 0 ? (
-                                <p className="text-sm text-[#8b8476] italic">
-                                    No students enrolled in this class yet.
-                                </p>
-                            ) : (
-                                <ul className="divide-y divide-gray-100">
-                                    {viewStudentsFor.students.map((s) => (
-                                        <li
-                                            key={s.id}
-                                            className="text-sm text-[#2c2c2c] py-2"
-                                        >
-                                            {s.name}
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
@@ -5650,6 +6185,973 @@ function ClassManagementSection({
         }
     };
 
+    if (showAddClassModal) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowAddClassModal(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Class Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Class Details
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Create a new class section, assign an adviser and
+                        room, and set up its subjects.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Grade Level *
+                            </label>
+                            <select
+                                value={newClassForm.grade}
+                                onChange={(e) =>
+                                    setNewClassForm((f) => ({
+                                        ...f,
+                                        grade: e.target.value,
+                                        subjects: buildDefaultSubjectRows(
+                                            e.target.value,
+                                        ),
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                            >
+                                {CLASS_GRADE_OPTIONS.map((g) => (
+                                    <option key={g} value={g}>
+                                        {g}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Section *
+                            </label>
+                            <input
+                                value={newClassForm.section}
+                                onChange={(e) =>
+                                    setNewClassForm((f) => ({
+                                        ...f,
+                                        section: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. Section A"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="relative">
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Adviser
+                            </label>
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
+                                <input
+                                    type="text"
+                                    value={
+                                        newClassForm.adviserId
+                                            ? (teachers.find(
+                                                  (t) =>
+                                                      t.id ===
+                                                      newClassForm.adviserId,
+                                              )?.name ?? adviserSearch)
+                                            : adviserSearch
+                                    }
+                                    onChange={(e) => {
+                                        setAdviserSearch(e.target.value);
+                                        setShowAdviserResults(true);
+                                        if (newClassForm.adviserId)
+                                            setNewClassForm((f) => ({
+                                                ...f,
+                                                adviserId: "",
+                                            }));
+                                    }}
+                                    onFocus={() =>
+                                        setShowAdviserResults(true)
+                                    }
+                                    onBlur={() =>
+                                        setTimeout(
+                                            () =>
+                                                setShowAdviserResults(false),
+                                            150,
+                                        )
+                                    }
+                                    placeholder="Search teacher name…"
+                                    className="w-full pl-9 pr-8 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                                />
+                                {newClassForm.adviserId && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setNewClassForm((f) => ({
+                                                ...f,
+                                                adviserId: "",
+                                            }));
+                                            setAdviserSearch("");
+                                        }}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 rounded-full"
+                                        title="Clear adviser"
+                                    >
+                                        <X className="w-3.5 h-3.5 text-[#8b8476]" />
+                                    </button>
+                                )}
+                            </div>
+                            {showAdviserResults &&
+                                !newClassForm.adviserId && (
+                                    <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100">
+                                        {teachers.filter((t) =>
+                                            t.name
+                                                .toLowerCase()
+                                                .includes(
+                                                    adviserSearch
+                                                        .trim()
+                                                        .toLowerCase(),
+                                                ),
+                                        ).length === 0 ? (
+                                            <p className="text-xs text-[#8b8476] italic text-center py-3">
+                                                No matching teachers found.
+                                            </p>
+                                        ) : (
+                                            teachers
+                                                .filter((t) =>
+                                                    t.name
+                                                        .toLowerCase()
+                                                        .includes(
+                                                            adviserSearch
+                                                                .trim()
+                                                                .toLowerCase(),
+                                                        ),
+                                                )
+                                                .map((t) => (
+                                                    <button
+                                                        key={t.id}
+                                                        type="button"
+                                                        onMouseDown={(e) =>
+                                                            e.preventDefault()
+                                                        }
+                                                        onClick={() => {
+                                                            setNewClassForm(
+                                                                (f) => ({
+                                                                    ...f,
+                                                                    adviserId:
+                                                                        t.id,
+                                                                }),
+                                                            );
+                                                            setAdviserSearch(
+                                                                "",
+                                                            );
+                                                            setShowAdviserResults(
+                                                                false,
+                                                            );
+                                                        }}
+                                                        className="w-full text-left px-3 py-2 text-sm hover:bg-[#faf8f5] transition-colors"
+                                                    >
+                                                        {t.name}
+                                                    </button>
+                                                ))
+                                        )}
+                                    </div>
+                                )}
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Room
+                            </label>
+                            <select
+                                value={newClassForm.room}
+                                onChange={(e) =>
+                                    setNewClassForm((f) => ({
+                                        ...f,
+                                        room: e.target.value,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            >
+                                <option value="">Select a room…</option>
+                                {roomCatalog.map((r) => (
+                                    <option key={r.id} value={r.name}>
+                                        {r.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="flex items-center justify-between mb-2">
+                            <label className="block text-sm font-medium text-[#6b6456]">
+                                Subjects & Assigned Teachers
+                            </label>
+                            <button
+                                onClick={addNewClassSubjectRow}
+                                className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
+                            >
+                                <Plus className="w-3.5 h-3.5" /> Add Subject
+                            </button>
+                        </div>
+                        <div className="space-y-2">
+                            {newClassForm.subjects.length === 0 ? (
+                                <p className="text-xs text-[#8b8476] italic py-2">
+                                    No subjects yet — click "Add Subject" to
+                                    assign one.
+                                </p>
+                            ) : (
+                                newClassForm.subjects.map((row) => (
+                                    <div
+                                        key={row.id}
+                                        className="flex items-center gap-2"
+                                    >
+                                        <select
+                                            value={row.subject}
+                                            onChange={(e) =>
+                                                updateNewClassSubjectRow(
+                                                    row.id,
+                                                    "subject",
+                                                    e.target.value,
+                                                )
+                                            }
+                                            className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                        >
+                                            <option value="">
+                                                Select subject
+                                            </option>
+                                            {subjectOptionsForGrade(
+                                                newClassForm.grade,
+                                            ).map((s) => (
+                                                <option
+                                                    key={s.id}
+                                                    value={s.name}
+                                                >
+                                                    {s.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <select
+                                            value={row.teacherId || ""}
+                                            onChange={(e) =>
+                                                updateNewClassSubjectRow(
+                                                    row.id,
+                                                    "teacherId",
+                                                    e.target.value,
+                                                )
+                                            }
+                                            className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                        >
+                                            <option value="">
+                                                Select teacher
+                                            </option>
+                                            {teachers.map((t) => (
+                                                <option
+                                                    key={t.id}
+                                                    value={t.id}
+                                                >
+                                                    {t.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            onClick={() =>
+                                                removeNewClassSubjectRow(
+                                                    row.id,
+                                                )
+                                            }
+                                            className="p-2 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                                            title="Remove"
+                                        >
+                                            <Trash2 className="w-4 h-4 text-red-400" />
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        {subjectOptionsForGrade(newClassForm.grade).length ===
+                            0 && (
+                            <p className="text-xs text-amber-600 mt-2">
+                                No subjects configured for this grade level
+                                yet. Add some under Subject Management in the
+                                Teacher Portal.
+                            </p>
+                        )}
+                    </div>
+
+                    {classFormError && (
+                        <p className="text-sm text-red-500">
+                            {classFormError}
+                        </p>
+                    )}
+
+                    <div className="flex gap-3 pt-4 border-t border-gray-200">
+                        <button
+                            onClick={() => setShowAddClassModal(false)}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={createClass}
+                            disabled={
+                                !newClassForm.section.trim() || creatingClass
+                            }
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {creatingClass ? "Creating…" : "Create Class"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (viewStudentsClass) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setViewStudentsClass(null)}
+                    className="flex items-center gap-2 text-[#1a2b4a] hover:text-[#2d4263] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Class Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        {viewStudentsClass.grade} — {viewStudentsClass.section}
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Adviser, subjects, and the students currently
+                        assigned to this section.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div>
+                        <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">
+                            Adviser
+                        </p>
+                        <div className="flex items-center gap-1.5 text-sm">
+                            <UserCheck className="w-4 h-4 text-[#c9a961] shrink-0" />
+                            <span className="font-semibold text-[#2c2c2c]">
+                                {viewStudentsClass.adviser || "—"}
+                            </span>
+                        </div>
+                    </div>
+                    <div>
+                        <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">
+                            Subjects & Teachers
+                        </p>
+                        {viewStudentsClass.subjects.length === 0 ? (
+                            <p className="text-xs text-[#8b8476] italic">
+                                No subjects assigned yet.
+                            </p>
+                        ) : (
+                            <div className="space-y-1.5">
+                                {viewStudentsClass.subjects.map((sub) => (
+                                    <div
+                                        key={sub.id}
+                                        className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3"
+                                    >
+                                        <span className="text-[#2c2c2c] font-medium">
+                                            {sub.subject}
+                                        </span>
+                                        <span className="text-[#6b6456] text-xs">
+                                            {sub.teacher}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                    <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">
+                        Students
+                    </p>
+                    {rosterForClass(viewStudentsClass).length === 0 ? (
+                        <p className="text-sm text-[#8b8476] italic text-center py-6">
+                            No students assigned to{" "}
+                            {viewStudentsClass.grade} —{" "}
+                            {viewStudentsClass.section} yet.
+                        </p>
+                    ) : (
+                        <div className="divide-y divide-gray-200">
+                            {rosterForClass(viewStudentsClass).map((s) => (
+                                <div
+                                    key={s.id}
+                                    className="py-2.5 flex items-center justify-between"
+                                >
+                                    <div>
+                                        <p className="text-sm font-medium text-[#2c2c2c]">
+                                            {formatFamilyNameFirst(s.name)}
+                                        </p>
+                                        <p className="text-xs text-[#8b8476] font-mono">
+                                            {s.id}
+                                        </p>
+                                    </div>
+                                    <span className="text-xs font-semibold text-[#1a2b4a] bg-[#1a2b4a]/10 px-2.5 py-1 rounded-full">
+                                        {s.section}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    if (showAssignPanel && assignTargetClass) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowAssignPanel(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Class Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Assign Student — {assignTargetClass.grade}{" "}
+                        {assignTargetClass.section}
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Search for a student and move them into this
+                        section.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            Search Student (Name or Student ID)
+                        </label>
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                            <input
+                                type="text"
+                                value={assignSearch}
+                                onChange={(e) =>
+                                    setAssignSearch(e.target.value)
+                                }
+                                placeholder={`Type a name or student ID (${assignTargetClass.grade} students)...`}
+                                className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7d1935]/20 text-black"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-100">
+                        {assignSearchResults.length === 0 ? (
+                            <p className="text-xs text-[#8b8476] italic text-center py-4">
+                                {!assignSearch.trim()
+                                    ? `Start typing to search ${assignTargetClass.grade} students.`
+                                    : "No matching students found."}
+                            </p>
+                        ) : (
+                            assignSearchResults.map((s) => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => setPickedStudentId(s.id)}
+                                    className={`w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors ${pickedStudentId === s.id ? "bg-[#fdf9f0]" : "hover:bg-[#faf8f5]"}`}
+                                >
+                                    <div>
+                                        <p className="text-sm font-medium text-[#2c2c2c]">
+                                            {formatFamilyNameFirst(s.name)}
+                                        </p>
+                                        <p className="text-xs text-[#8b8476] font-mono">
+                                            {s.id}
+                                        </p>
+                                        {s.section && (
+                                            <p className="text-xs text-[#8b8476]">
+                                                Currently: {s.grade} —{" "}
+                                                {s.section}
+                                            </p>
+                                        )}
+                                    </div>
+                                    {pickedStudentId === s.id && (
+                                        <Check className="w-4 h-4 text-[#7d1935]" />
+                                    )}
+                                </button>
+                            ))
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Grade Level
+                            </label>
+                            <input
+                                value={assignTargetClass.grade}
+                                disabled
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-400"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Section
+                            </label>
+                            <input
+                                value={assignTargetClass.section}
+                                disabled
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-400"
+                            />
+                        </div>
+                    </div>
+                    <p className="text-xs text-[#8b8476]">
+                        Once assigned, this student moves into the{" "}
+                        {assignTargetClass.grade} — {assignTargetClass.section}{" "}
+                        roster (out of any prior class).
+                    </p>
+                    {assignError && (
+                        <p className="text-sm text-red-500">{assignError}</p>
+                    )}
+
+                    <div className="flex gap-3 pt-4 border-t border-gray-200">
+                        <button
+                            onClick={() => setShowAssignPanel(false)}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={confirmAssign}
+                            disabled={!pickedStudentId || assigning}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {assigning ? "Assigning…" : "Assign"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (editingSection) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setEditingSection(null)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Class Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        {editingSection.grade} — {editingSection.section}
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Edit this section's adviser, room, and subject
+                        assignments.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Adviser
+                            </label>
+                            <select
+                                value={sectionForm.adviserId}
+                                onChange={(e) =>
+                                    setSectionForm((f) => ({
+                                        ...f,
+                                        adviserId: e.target.value,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                            >
+                                <option value="">No adviser assigned</option>
+                                {teachers.map((t) => (
+                                    <option key={t.id} value={t.id}>
+                                        {t.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Room
+                            </label>
+                            <select
+                                value={sectionForm.room}
+                                onChange={(e) =>
+                                    setSectionForm((f) => ({
+                                        ...f,
+                                        room: e.target.value,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            >
+                                <option value="">Select a room…</option>
+                                {roomCatalog.map((r) => (
+                                    <option key={r.id} value={r.name}>
+                                        {r.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div className="flex items-center justify-between mb-2">
+                            <label className="block text-sm font-medium text-[#6b6456]">
+                                Subjects & Assigned Teachers
+                            </label>
+                            <button
+                                onClick={addSubjectRow}
+                                className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
+                            >
+                                <Plus className="w-3.5 h-3.5" /> Add Subject
+                            </button>
+                        </div>
+                        <div className="space-y-2">
+                            {sectionForm.subjects.length === 0 ? (
+                                <p className="text-xs text-[#8b8476] italic py-2">
+                                    No subjects yet — click "Add Subject" to
+                                    assign one.
+                                </p>
+                            ) : (
+                                sectionForm.subjects.map((row) => (
+                                    <div
+                                        key={row.id}
+                                        className="flex items-center gap-2"
+                                    >
+                                        <select
+                                            value={row.subject}
+                                            onChange={(e) =>
+                                                updateSubjectRow(
+                                                    row.id,
+                                                    "subject",
+                                                    e.target.value,
+                                                )
+                                            }
+                                            className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                        >
+                                            <option value="">
+                                                Select subject
+                                            </option>
+                                            {subjectOptionsForGrade(
+                                                editingSection?.grade ??
+                                                    selectedGrade,
+                                            ).map((s) => (
+                                                <option
+                                                    key={s.id}
+                                                    value={s.name}
+                                                >
+                                                    {s.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <select
+                                            value={row.teacherId || ""}
+                                            onChange={(e) =>
+                                                updateSubjectRow(
+                                                    row.id,
+                                                    "teacherId",
+                                                    e.target.value,
+                                                )
+                                            }
+                                            className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
+                                        >
+                                            <option value="">
+                                                Select teacher
+                                            </option>
+                                            {teachers.map((t) => (
+                                                <option
+                                                    key={t.id}
+                                                    value={t.id}
+                                                >
+                                                    {t.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <button
+                                            onClick={() =>
+                                                removeSubjectRow(row.id)
+                                            }
+                                            className="p-2 hover:bg-red-50 rounded-lg transition-colors shrink-0"
+                                            title="Remove"
+                                        >
+                                            <Trash2 className="w-4 h-4 text-red-400" />
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    {classFormError && (
+                        <p className="text-sm text-red-500">
+                            {classFormError}
+                        </p>
+                    )}
+
+                    <div className="flex gap-3 pt-4 border-t border-gray-200">
+                        <button
+                            onClick={() => setEditingSection(null)}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={saveSectionAssignments}
+                            disabled={savingSection}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60"
+                        >
+                            {savingSection ? "Saving…" : "Save Changes"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (showReopenRequestsModal) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowReopenRequestsModal(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Class Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Grade Edit Requests
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Teachers requesting to reopen a locked grade quarter
+                        for a student.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div className="px-6 pt-4 flex items-center gap-2 border-b border-gray-200">
+                        <button
+                            onClick={() => setRequestsModalTab("pending")}
+                            className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
+                                requestsModalTab === "pending"
+                                    ? "border-[#7d1935] text-[#7d1935]"
+                                    : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
+                            }`}
+                        >
+                            Pending
+                            {pendingReopenCount > 0
+                                ? ` (${pendingReopenCount})`
+                                : ""}
+                        </button>
+                        <button
+                            onClick={() => setRequestsModalTab("history")}
+                            className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
+                                requestsModalTab === "history"
+                                    ? "border-[#7d1935] text-[#7d1935]"
+                                    : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
+                            }`}
+                        >
+                            History
+                        </button>
+                    </div>
+                    <div className="p-6 space-y-3">
+                        {requestsModalTab === "pending" ? (
+                            <>
+                                <p className="text-sm text-[#6b6456]">
+                                    Teachers requesting to reopen a locked
+                                    grade quarter for a student. Approving
+                                    lets the teacher re-enter that quarter's
+                                    grade; denying leaves it locked.
+                                </p>
+                                {reopenRequestsError && (
+                                    <p className="text-sm text-red-500">
+                                        {reopenRequestsError}
+                                    </p>
+                                )}
+                                {reopenRequestsLoading ? (
+                                    <div className="text-center text-sm text-[#8b8476] py-10">
+                                        Loading requests…
+                                    </div>
+                                ) : reopenRequests.length === 0 ? (
+                                    <div className="text-center text-sm text-[#8b8476] py-10">
+                                        No pending grade edit requests.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {reopenRequests.map((req) => (
+                                            <div
+                                                key={req.id}
+                                                className="border border-gray-200 rounded-xl p-4 flex items-center justify-between gap-4"
+                                            >
+                                                <div>
+                                                    <p className="font-semibold text-[#1a2b4a] text-sm">
+                                                        {req.studentName} —{" "}
+                                                        {req.quarter}
+                                                    </p>
+                                                    <p className="text-xs text-[#6b6456] mt-0.5">
+                                                        {req.className}
+                                                    </p>
+                                                    <p className="text-xs text-[#8b8476] mt-0.5">
+                                                        Requested by{" "}
+                                                        {req.teacherName} •{" "}
+                                                        {new Date(
+                                                            req.requestedAt,
+                                                        ).toLocaleString(
+                                                            "en-US",
+                                                            {
+                                                                month: "short",
+                                                                day: "numeric",
+                                                                year: "numeric",
+                                                                hour: "numeric",
+                                                                minute: "2-digit",
+                                                            },
+                                                        )}
+                                                    </p>
+                                                    {req.notes && (
+                                                        <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
+                                                            "{req.notes}"
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <button
+                                                        onClick={() =>
+                                                            resolveReopenRequest(
+                                                                req.id,
+                                                                false,
+                                                            )
+                                                        }
+                                                        disabled={
+                                                            resolvingRequestId ===
+                                                            req.id
+                                                        }
+                                                        className="px-3 py-2 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#6b6456] hover:border-red-300 hover:text-red-600 transition-all disabled:opacity-50"
+                                                    >
+                                                        Deny
+                                                    </button>
+                                                    <button
+                                                        onClick={() =>
+                                                            resolveReopenRequest(
+                                                                req.id,
+                                                                true,
+                                                            )
+                                                        }
+                                                        disabled={
+                                                            resolvingRequestId ===
+                                                            req.id
+                                                        }
+                                                        className="px-3 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white hover:shadow-lg transition-all disabled:opacity-50"
+                                                    >
+                                                        Approve
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-sm text-[#6b6456]">
+                                    A log of past grade edit requests and how
+                                    they were resolved, most recent first.
+                                </p>
+                                {reopenHistoryError && (
+                                    <p className="text-sm text-red-500">
+                                        {reopenHistoryError}
+                                    </p>
+                                )}
+                                {reopenHistoryLoading ? (
+                                    <div className="text-center text-sm text-[#8b8476] py-10">
+                                        Loading history…
+                                    </div>
+                                ) : reopenHistory.length === 0 ? (
+                                    <div className="text-center text-sm text-[#8b8476] py-10">
+                                        No resolved grade edit requests yet.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {reopenHistory.map((req) => (
+                                            <div
+                                                key={req.id}
+                                                className="border border-gray-200 rounded-xl p-4"
+                                            >
+                                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                    <p className="font-semibold text-[#1a2b4a] text-sm">
+                                                        {req.studentName} —{" "}
+                                                        {req.quarter}
+                                                    </p>
+                                                    <span
+                                                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
+                                                            req.status ===
+                                                            "approved"
+                                                                ? "bg-green-100 text-green-700"
+                                                                : req.status ===
+                                                                    "denied"
+                                                                  ? "bg-red-100 text-red-600"
+                                                                  : "bg-gray-100 text-gray-600"
+                                                        }`}
+                                                    >
+                                                        {req.status}
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-[#6b6456] mt-0.5">
+                                                    {req.className}
+                                                </p>
+                                                <p className="text-xs text-[#8b8476] mt-0.5">
+                                                    Requested by{" "}
+                                                    {req.teacherName} •{" "}
+                                                    {new Date(
+                                                        req.requestedAt,
+                                                    ).toLocaleString(
+                                                        "en-US",
+                                                        {
+                                                            month: "short",
+                                                            day: "numeric",
+                                                            year: "numeric",
+                                                            hour: "numeric",
+                                                            minute: "2-digit",
+                                                        },
+                                                    )}
+                                                </p>
+                                                {req.resolvedAt && (
+                                                    <p className="text-xs text-[#8b8476] mt-0.5">
+                                                        Resolved{" "}
+                                                        {new Date(
+                                                            req.resolvedAt,
+                                                        ).toLocaleString(
+                                                            "en-US",
+                                                            {
+                                                                month: "short",
+                                                                day: "numeric",
+                                                                year: "numeric",
+                                                                hour: "numeric",
+                                                                minute: "2-digit",
+                                                            },
+                                                        )}
+                                                    </p>
+                                                )}
+                                                {req.notes && (
+                                                    <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
+                                                        "{req.notes}"
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -5785,7 +7287,7 @@ function ClassManagementSection({
                                         <tr key={cls.id} className="hover:bg-[#faf8f5] transition-colors align-top">
                                             <td className="px-6 py-4">
                                                 <p className="font-bold text-[#1a2b4a] text-sm">
-                                                    {cls.grade} — {cls.section}
+                                                    {cls.section}
                                                 </p>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-[#6b6456]">
@@ -5954,971 +7456,6 @@ function ClassManagementSection({
                 </div>
                 )}
             </div>
-
-            {/* Add Class Modal */}
-            {showAddClassModal && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 z-20 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <h3 className="text-lg font-semibold">
-                                    Class Details
-                                </h3>
-                            </div>
-                            {/* <button onClick={() => setShowAddClassModal(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button> */}
-                        </div>
-
-                        <div className="p-6 space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Grade Level *
-                                    </label>
-                                    <select
-                                        value={newClassForm.grade}
-                                        onChange={(e) =>
-                                            setNewClassForm((f) => ({
-                                                ...f,
-                                                grade: e.target.value,
-                                                subjects: buildDefaultSubjectRows(e.target.value),
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                    >
-                                        {CLASS_GRADE_OPTIONS.map((g) => (
-                                            <option key={g} value={g}>
-                                                {g}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Section *
-                                    </label>
-                                    <input
-                                        value={newClassForm.section}
-                                        onChange={(e) =>
-                                            setNewClassForm((f) => ({
-                                                ...f,
-                                                section: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. Section A"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="relative">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Adviser
-                                    </label>
-                                    <div className="relative">
-                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-black" />
-                                        <input
-                                            type="text"
-                                            value={
-                                                newClassForm.adviserId
-                                                    ? (teachers.find(
-                                                          (t) =>
-                                                              t.id ===
-                                                              newClassForm.adviserId,
-                                                      )?.name ?? adviserSearch)
-                                                    : adviserSearch
-                                            }
-                                            onChange={(e) => {
-                                                setAdviserSearch(
-                                                    e.target.value,
-                                                );
-                                                setShowAdviserResults(true);
-                                                if (newClassForm.adviserId)
-                                                    setNewClassForm((f) => ({
-                                                        ...f,
-                                                        adviserId: "",
-                                                    }));
-                                            }}
-                                            onFocus={() =>
-                                                setShowAdviserResults(true)
-                                            }
-                                            onBlur={() =>
-                                                setTimeout(
-                                                    () =>
-                                                        setShowAdviserResults(
-                                                            false,
-                                                        ),
-                                                    150,
-                                                )
-                                            }
-                                            placeholder="Search teacher name…"
-                                            className="w-full pl-9 pr-8 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                        />
-                                        {newClassForm.adviserId && (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setNewClassForm((f) => ({
-                                                        ...f,
-                                                        adviserId: "",
-                                                    }));
-                                                    setAdviserSearch("");
-                                                }}
-                                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 rounded-full"
-                                                title="Clear adviser"
-                                            >
-                                                <X className="w-3.5 h-3.5 text-[#8b8476]" />
-                                            </button>
-                                        )}
-                                    </div>
-                                    {showAdviserResults &&
-                                        !newClassForm.adviserId && (
-                                            <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100">
-                                                {teachers.filter((t) =>
-                                                    t.name
-                                                        .toLowerCase()
-                                                        .includes(
-                                                            adviserSearch
-                                                                .trim()
-                                                                .toLowerCase(),
-                                                        ),
-                                                ).length === 0 ? (
-                                                    <p className="text-xs text-[#8b8476] italic text-center py-3">
-                                                        No matching teachers
-                                                        found.
-                                                    </p>
-                                                ) : (
-                                                    teachers
-                                                        .filter((t) =>
-                                                            t.name
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    adviserSearch
-                                                                        .trim()
-                                                                        .toLowerCase(),
-                                                                ),
-                                                        )
-                                                        .map((t) => (
-                                                            <button
-                                                                key={t.id}
-                                                                type="button"
-                                                                onMouseDown={(
-                                                                    e,
-                                                                ) =>
-                                                                    e.preventDefault()
-                                                                }
-                                                                onClick={() => {
-                                                                    setNewClassForm(
-                                                                        (
-                                                                            f,
-                                                                        ) => ({
-                                                                            ...f,
-                                                                            adviserId:
-                                                                                t.id,
-                                                                        }),
-                                                                    );
-                                                                    setAdviserSearch(
-                                                                        "",
-                                                                    );
-                                                                    setShowAdviserResults(
-                                                                        false,
-                                                                    );
-                                                                }}
-                                                                className="w-full text-left px-3 py-2 text-sm hover:bg-[#faf8f5] transition-colors"
-                                                            >
-                                                                {t.name}
-                                                            </button>
-                                                        ))
-                                                )}
-                                            </div>
-                                        )}
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Room
-                                    </label>
-                                    <select
-                                        value={newClassForm.room}
-                                        onChange={(e) =>
-                                            setNewClassForm((f) => ({
-                                                ...f,
-                                                room: e.target.value,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    >
-                                        <option value="">Select a room…</option>
-                                        {roomCatalog.map((r) => (
-                                            <option key={r.id} value={r.name}>{r.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div>
-                                <div className="flex items-center justify-between mb-2">
-                                    <label className="block text-sm font-medium text-[#6b6456]">
-                                        Subjects & Assigned Teachers
-                                    </label>
-                                    <button
-                                        onClick={addNewClassSubjectRow}
-                                        className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
-                                    >
-                                        <Plus className="w-3.5 h-3.5" /> Add
-                                        Subject
-                                    </button>
-                                </div>
-                                <div className="space-y-2">
-                                    {newClassForm.subjects.length === 0 ? (
-                                        <p className="text-xs text-[#8b8476] italic py-2">
-                                            No subjects yet — click "Add
-                                            Subject" to assign one.
-                                        </p>
-                                    ) : (
-                                        newClassForm.subjects.map((row) => (
-                                            <div
-                                                key={row.id}
-                                                className="flex items-center gap-2"
-                                            >
-                                                <select
-                                                    value={row.subject}
-                                                    onChange={(e) =>
-                                                        updateNewClassSubjectRow(
-                                                            row.id,
-                                                            "subject",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                                >
-                                                    <option value="">
-                                                        Select subject
-                                                    </option>
-                                                    {subjectOptionsForGrade(
-                                                        newClassForm.grade,
-                                                    ).map((s) => (
-                                                        <option
-                                                            key={s.id}
-                                                            value={s.name}
-                                                        >
-                                                            {s.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                                <select
-                                                    value={row.teacherId || ""}
-                                                    onChange={(e) =>
-                                                        updateNewClassSubjectRow(
-                                                            row.id,
-                                                            "teacherId",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                                >
-                                                    <option value="">
-                                                        Select teacher
-                                                    </option>
-                                                    {teachers.map((t) => (
-                                                        <option
-                                                            key={t.id}
-                                                            value={t.id}
-                                                        >
-                                                            {t.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() =>
-                                                        removeNewClassSubjectRow(
-                                                            row.id,
-                                                        )
-                                                    }
-                                                    className="p-2 hover:bg-red-50 rounded-lg transition-colors shrink-0"
-                                                    title="Remove"
-                                                >
-                                                    <Trash2 className="w-4 h-4 text-red-400" />
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                                {subjectOptionsForGrade(newClassForm.grade)
-                                    .length === 0 && (
-                                    <p className="text-xs text-amber-600 mt-2">
-                                        No subjects configured for this grade
-                                        level yet. Add some under Subject
-                                        Management in the Teacher Portal.
-                                    </p>
-                                )}
-                            </div>
-
-                            {classFormError && (
-                                <p className="text-sm text-red-500">
-                                    {classFormError}
-                                </p>
-                            )}
-
-                            <div className="flex gap-3 pt-4 border-t border-gray-200">
-                                <button
-                                    onClick={() => setShowAddClassModal(false)}
-                                    className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={createClass}
-                                    disabled={
-                                        !newClassForm.section.trim() ||
-                                        creatingClass
-                                    }
-                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                    {creatingClass
-                                        ? "Creating…"
-                                        : "Create Class"}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* View Students in Class Modal */}
-            {viewStudentsClass && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <GraduationCap className="w-5 h-5" />
-                                <h3 className="text-lg font-semibold">
-                                    {viewStudentsClass.grade} —{" "}
-                                    {viewStudentsClass.section}
-                                </h3>
-                            </div>
-                            <button
-                                onClick={() => setViewStudentsClass(null)}
-                                className="p-1 hover:bg-white/20 rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6 pb-0 space-y-4">
-                            <div>
-                                <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">Adviser</p>
-                                <div className="flex items-center gap-1.5 text-sm">
-                                    <UserCheck className="w-4 h-4 text-[#c9a961] shrink-0" />
-                                    <span className="font-semibold text-[#2c2c2c]">
-                                        {viewStudentsClass.adviser || "—"}
-                                    </span>
-                                </div>
-                            </div>
-                            <div>
-                                <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">Subjects & Teachers</p>
-                                {viewStudentsClass.subjects.length === 0 ? (
-                                    <p className="text-xs text-[#8b8476] italic">No subjects assigned yet.</p>
-                                ) : (
-                                    <div className="space-y-1.5">
-                                        {viewStudentsClass.subjects.map((sub) => (
-                                            <div
-                                                key={sub.id}
-                                                className="flex items-center justify-between text-sm px-2.5 py-1.5 bg-[#faf8f5] rounded-lg gap-3"
-                                            >
-                                                <span className="text-[#2c2c2c] font-medium">
-                                                    {sub.subject}
-                                                </span>
-                                                <span className="text-[#6b6456] text-xs">
-                                                    {sub.teacher}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        <div className="p-6">
-                            <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide mb-1.5">Students</p>
-                            {rosterForClass(viewStudentsClass).length === 0 ? (
-                                <p className="text-sm text-[#8b8476] italic text-center py-6">
-                                    No students assigned to{" "}
-                                    {viewStudentsClass.grade} —{" "}
-                                    {viewStudentsClass.section} yet.
-                                </p>
-                            ) : (
-                                <div className="divide-y divide-gray-200">
-                                    {rosterForClass(viewStudentsClass).map(
-                                        (s) => (
-                                            <div
-                                                key={s.id}
-                                                className="py-2.5 flex items-center justify-between"
-                                            >
-                                                <div>
-                                                    <p className="text-sm font-medium text-[#2c2c2c]">
-                                                        {formatFamilyNameFirst(
-                                                            s.name,
-                                                        )}
-                                                    </p>
-                                                    <p className="text-xs text-[#8b8476] font-mono">
-                                                        {s.id}
-                                                    </p>
-                                                </div>
-                                                <span className="text-xs font-semibold text-[#1a2b4a] bg-[#1a2b4a]/10 px-2.5 py-1 rounded-full">
-                                                    {s.section}
-                                                </span>
-                                            </div>
-                                        ),
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Assign Students Panel */}
-            {showAssignPanel && assignTargetClass && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <UserPlus className="w-5 h-5" />
-                                <h3 className="text-lg font-semibold">
-                                    Assigned Students —{" "}
-                                    {assignTargetClass.grade}{" "}
-                                    {assignTargetClass.section}
-                                </h3>
-                            </div>
-                            {/* <button onClick={() => setShowAssignPanel(false)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button> */}
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Search Student (Name or Student ID)
-                                </label>
-                                <div className="relative">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
-                                    <input
-                                        type="text"
-                                        value={assignSearch}
-                                        onChange={(e) =>
-                                            setAssignSearch(e.target.value)
-                                        }
-                                        placeholder={`Type a name or student ID (${assignTargetClass.grade} students)...`}
-                                        className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7d1935]/20 text-black"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto divide-y divide-gray-100">
-                                {assignSearchResults.length === 0 ? (
-                                    <p className="text-xs text-[#8b8476] italic text-center py-4">
-                                        {!assignSearch.trim()
-                                            ? `Start typing to search ${assignTargetClass.grade} students.`
-                                            : "No matching students found."}
-                                    </p>
-                                ) : (
-                                    assignSearchResults.map((s) => (
-                                        <button
-                                            key={s.id}
-                                            onClick={() =>
-                                                setPickedStudentId(s.id)
-                                            }
-                                            className={`w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors ${pickedStudentId === s.id ? "bg-[#fdf9f0]" : "hover:bg-[#faf8f5]"}`}
-                                        >
-                                            <div>
-                                                <p className="text-sm font-medium text-[#2c2c2c]">
-                                                    {formatFamilyNameFirst(
-                                                        s.name,
-                                                    )}
-                                                </p>
-                                                <p className="text-xs text-[#8b8476] font-mono">
-                                                    {s.id}
-                                                </p>
-                                                {s.section && (
-                                                    <p className="text-xs text-[#8b8476]">
-                                                        Currently: {s.grade} —{" "}
-                                                        {s.section}
-                                                    </p>
-                                                )}
-                                            </div>
-                                            {pickedStudentId === s.id && (
-                                                <Check className="w-4 h-4 text-[#7d1935]" />
-                                            )}
-                                        </button>
-                                    ))
-                                )}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Grade Level
-                                    </label>
-                                    <input
-                                        value={assignTargetClass.grade}
-                                        disabled
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-400"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Section
-                                    </label>
-                                    <input
-                                        value={assignTargetClass.section}
-                                        disabled
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-400"
-                                    />
-                                </div>
-                            </div>
-                            <p className="text-xs text-[#8b8476]">
-                                Once assigned, this student moves into the{" "}
-                                {assignTargetClass.grade} —{" "}
-                                {assignTargetClass.section} roster (out of any
-                                prior class).
-                            </p>
-                            {assignError && (
-                                <p className="text-sm text-red-500">
-                                    {assignError}
-                                </p>
-                            )}
-                        </div>
-                        <div className="p-6 border-t border-gray-200 flex gap-3">
-                            <button
-                                onClick={() => setShowAssignPanel(false)}
-                                className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                            >
-                                Close
-                            </button>
-                            <button
-                                onClick={confirmAssign}
-                                disabled={!pickedStudentId || assigning}
-                                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                                {assigning ? "Assigning…" : "Assign"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Edit Section Assignments Modal */}
-            {editingSection && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 z-20 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <Edit className="w-5 h-5" />
-                                <h3 className="text-lg font-semibold">
-                                    {editingSection.grade} —{" "}
-                                    {editingSection.section}
-                                </h3>
-                            </div>
-                            {/* <button onClick={() => setEditingSection(null)} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-5 h-5" /></button> */}
-                        </div>
-
-                        <div className="p-6 space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Adviser
-                                    </label>
-                                    <select
-                                        value={sectionForm.adviserId}
-                                        onChange={(e) =>
-                                            setSectionForm((f) => ({
-                                                ...f,
-                                                adviserId: e.target.value,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                    >
-                                        <option value="">
-                                            No adviser assigned
-                                        </option>
-                                        {teachers.map((t) => (
-                                            <option key={t.id} value={t.id}>
-                                                {t.name}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Room
-                                    </label>
-                                    <select
-                                        value={sectionForm.room}
-                                        onChange={(e) =>
-                                            setSectionForm((f) => ({
-                                                ...f,
-                                                room: e.target.value,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    >
-                                        <option value="">Select a room…</option>
-                                        {roomCatalog.map((r) => (
-                                            <option key={r.id} value={r.name}>{r.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div>
-                                <div className="flex items-center justify-between mb-2">
-                                    <label className="block text-sm font-medium text-[#6b6456]">
-                                        Subjects & Assigned Teachers
-                                    </label>
-                                    <button
-                                        onClick={addSubjectRow}
-                                        className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
-                                    >
-                                        <Plus className="w-3.5 h-3.5" /> Add
-                                        Subject
-                                    </button>
-                                </div>
-                                <div className="space-y-2">
-                                    {sectionForm.subjects.length === 0 ? (
-                                        <p className="text-xs text-[#8b8476] italic py-2">
-                                            No subjects yet — click "Add
-                                            Subject" to assign one.
-                                        </p>
-                                    ) : (
-                                        sectionForm.subjects.map((row) => (
-                                            <div
-                                                key={row.id}
-                                                className="flex items-center gap-2"
-                                            >
-                                                <select
-                                                    value={row.subject}
-                                                    onChange={(e) =>
-                                                        updateSubjectRow(
-                                                            row.id,
-                                                            "subject",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                                >
-                                                    <option value="">
-                                                        Select subject
-                                                    </option>
-                                                    {subjectOptionsForGrade(
-                                                        editingSection?.grade ??
-                                                            selectedGrade,
-                                                    ).map((s) => (
-                                                        <option
-                                                            key={s.id}
-                                                            value={s.name}
-                                                        >
-                                                            {s.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                                <select
-                                                    value={row.teacherId || ""}
-                                                    onChange={(e) =>
-                                                        updateSubjectRow(
-                                                            row.id,
-                                                            "teacherId",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] bg-white text-black"
-                                                >
-                                                    <option value="">
-                                                        Select teacher
-                                                    </option>
-                                                    {teachers.map((t) => (
-                                                        <option
-                                                            key={t.id}
-                                                            value={t.id}
-                                                        >
-                                                            {t.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() =>
-                                                        removeSubjectRow(row.id)
-                                                    }
-                                                    className="p-2 hover:bg-red-50 rounded-lg transition-colors shrink-0"
-                                                    title="Remove"
-                                                >
-                                                    <Trash2 className="w-4 h-4 text-red-400" />
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
-
-                            {classFormError && (
-                                <p className="text-sm text-red-500">
-                                    {classFormError}
-                                </p>
-                            )}
-
-                            <div className="flex gap-3 pt-4 border-t border-gray-200">
-                                <button
-                                    onClick={() => setEditingSection(null)}
-                                    className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={saveSectionAssignments}
-                                    disabled={savingSection}
-                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60"
-                                >
-                                    {savingSection ? "Saving…" : "Save Changes"}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Grade Edit Requests Modal */}
-            {showReopenRequestsModal && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <h3 className="text-lg font-bold">
-                                    Grade Edit Requests
-                                </h3>
-                            </div>
-                            <button
-                                onClick={() =>
-                                    setShowReopenRequestsModal(false)
-                                }
-                                className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="px-6 pt-4 flex items-center gap-2 border-b border-gray-200">
-                            <button
-                                onClick={() => setRequestsModalTab("pending")}
-                                className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
-                                    requestsModalTab === "pending"
-                                        ? "border-[#7d1935] text-[#7d1935]"
-                                        : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
-                                }`}
-                            >
-                                Pending
-                                {pendingReopenCount > 0
-                                    ? ` (${pendingReopenCount})`
-                                    : ""}
-                            </button>
-                            <button
-                                onClick={() => setRequestsModalTab("history")}
-                                className={`px-3 py-2 text-sm font-semibold border-b-2 transition-all ${
-                                    requestsModalTab === "history"
-                                        ? "border-[#7d1935] text-[#7d1935]"
-                                        : "border-transparent text-[#8b8476] hover:text-[#1a2b4a]"
-                                }`}
-                            >
-                                History
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-3">
-                            {requestsModalTab === "pending" ? (
-                                <>
-                                    <p className="text-sm text-[#6b6456]">
-                                        Teachers requesting to reopen a locked
-                                        grade quarter for a student. Approving
-                                        lets the teacher re-enter that
-                                        quarter's grade; denying leaves it
-                                        locked.
-                                    </p>
-                                    {reopenRequestsError && (
-                                        <p className="text-sm text-red-500">
-                                            {reopenRequestsError}
-                                        </p>
-                                    )}
-                                    {reopenRequestsLoading ? (
-                                        <div className="text-center text-sm text-[#8b8476] py-10">
-                                            Loading requests…
-                                        </div>
-                                    ) : reopenRequests.length === 0 ? (
-                                        <div className="text-center text-sm text-[#8b8476] py-10">
-                                            No pending grade edit requests.
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-3">
-                                            {reopenRequests.map((req) => (
-                                                <div
-                                                    key={req.id}
-                                                    className="border border-gray-200 rounded-xl p-4 flex items-center justify-between gap-4"
-                                                >
-                                                    <div>
-                                                        <p className="font-semibold text-[#1a2b4a] text-sm">
-                                                            {req.studentName} —{" "}
-                                                            {req.quarter}
-                                                        </p>
-                                                        <p className="text-xs text-[#6b6456] mt-0.5">
-                                                            {req.className}
-                                                        </p>
-                                                        <p className="text-xs text-[#8b8476] mt-0.5">
-                                                            Requested by{" "}
-                                                            {req.teacherName} •{" "}
-                                                            {new Date(
-                                                                req.requestedAt,
-                                                            ).toLocaleString(
-                                                                "en-US",
-                                                                {
-                                                                    month: "short",
-                                                                    day: "numeric",
-                                                                    year: "numeric",
-                                                                    hour: "numeric",
-                                                                    minute: "2-digit",
-                                                                },
-                                                            )}
-                                                        </p>
-                                                        {req.notes && (
-                                                            <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
-                                                                "{req.notes}"
-                                                            </p>
-                                                        )}
-                                                    </div>
-                                                    <div className="flex items-center gap-2 shrink-0">
-                                                        <button
-                                                            onClick={() =>
-                                                                resolveReopenRequest(
-                                                                    req.id,
-                                                                    false,
-                                                                )
-                                                            }
-                                                            disabled={
-                                                                resolvingRequestId ===
-                                                                req.id
-                                                            }
-                                                            className="px-3 py-2 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#6b6456] hover:border-red-300 hover:text-red-600 transition-all disabled:opacity-50"
-                                                        >
-                                                            Deny
-                                                        </button>
-                                                        <button
-                                                            onClick={() =>
-                                                                resolveReopenRequest(
-                                                                    req.id,
-                                                                    true,
-                                                                )
-                                                            }
-                                                            disabled={
-                                                                resolvingRequestId ===
-                                                                req.id
-                                                            }
-                                                            className="px-3 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white hover:shadow-lg transition-all disabled:opacity-50"
-                                                        >
-                                                            Approve
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            ) : (
-                                <>
-                                    <p className="text-sm text-[#6b6456]">
-                                        A log of past grade edit requests and
-                                        how they were resolved, most recent
-                                        first.
-                                    </p>
-                                    {reopenHistoryError && (
-                                        <p className="text-sm text-red-500">
-                                            {reopenHistoryError}
-                                        </p>
-                                    )}
-                                    {reopenHistoryLoading ? (
-                                        <div className="text-center text-sm text-[#8b8476] py-10">
-                                            Loading history…
-                                        </div>
-                                    ) : reopenHistory.length === 0 ? (
-                                        <div className="text-center text-sm text-[#8b8476] py-10">
-                                            No resolved grade edit requests
-                                            yet.
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-3">
-                                            {reopenHistory.map((req) => (
-                                                <div
-                                                    key={req.id}
-                                                    className="border border-gray-200 rounded-xl p-4"
-                                                >
-                                                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                                                        <p className="font-semibold text-[#1a2b4a] text-sm">
-                                                            {req.studentName} —{" "}
-                                                            {req.quarter}
-                                                        </p>
-                                                        <span
-                                                            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                                                                req.status ===
-                                                                "approved"
-                                                                    ? "bg-green-100 text-green-700"
-                                                                    : req.status ===
-                                                                        "denied"
-                                                                      ? "bg-red-100 text-red-600"
-                                                                      : "bg-gray-100 text-gray-600"
-                                                            }`}
-                                                        >
-                                                            {req.status}
-                                                        </span>
-                                                    </div>
-                                                    <p className="text-xs text-[#6b6456] mt-0.5">
-                                                        {req.className}
-                                                    </p>
-                                                    <p className="text-xs text-[#8b8476] mt-0.5">
-                                                        Requested by{" "}
-                                                        {req.teacherName} •{" "}
-                                                        {new Date(
-                                                            req.requestedAt,
-                                                        ).toLocaleString(
-                                                            "en-US",
-                                                            {
-                                                                month: "short",
-                                                                day: "numeric",
-                                                                year: "numeric",
-                                                                hour: "numeric",
-                                                                minute: "2-digit",
-                                                            },
-                                                        )}
-                                                    </p>
-                                                    {req.resolvedAt && (
-                                                        <p className="text-xs text-[#8b8476] mt-0.5">
-                                                            Resolved{" "}
-                                                            {new Date(
-                                                                req.resolvedAt,
-                                                            ).toLocaleString(
-                                                                "en-US",
-                                                                {
-                                                                    month: "short",
-                                                                    day: "numeric",
-                                                                    year: "numeric",
-                                                                    hour: "numeric",
-                                                                    minute: "2-digit",
-                                                                },
-                                                            )}
-                                                        </p>
-                                                    )}
-                                                    {req.notes && (
-                                                        <p className="text-xs text-[#2c2c2c] mt-1.5 bg-[#faf8f5] rounded-lg px-2.5 py-1.5">
-                                                            "{req.notes}"
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
@@ -7352,6 +7889,422 @@ function StaffManagement({
             .map((n: string) => n[0])
             .join("");
 
+    if (showEditModal && selectedEmployee) {
+        return (
+            <EmployeeEditModal
+                employee={selectedEmployee}
+                departments={departments}
+                onCancel={() => setShowEditModal(false)}
+                onSave={saveEdit}
+            />
+        );
+    }
+
+    if (showDetailModal && selectedEmployee) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowDetailModal(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Staff Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Employee Details
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Full profile for {selectedEmployee.name}
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+                    <div className="p-6 space-y-5">
+                        <div className="flex items-start gap-4 pb-5 border-b border-gray-200">
+                            <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
+                                {initials(selectedEmployee.name)}
+                            </div>
+                            <div>
+                                <h4 className="text-xl font-bold text-[#1a2b4a]">
+                                    {selectedEmployee.name}
+                                </h4>
+                                <p className="text-[#c9a961] font-medium">
+                                    {selectedEmployee.position} –{" "}
+                                    {selectedEmployee.department}
+                                </p>
+                                <span
+                                    className={`inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${statusConfig[selectedEmployee.status].bg} ${statusConfig[selectedEmployee.status].text}`}
+                                >
+                                    {statusConfig[selectedEmployee.status].label}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {[
+                                {
+                                    label: "Employee ID",
+                                    value: selectedEmployee.id,
+                                },
+                                {
+                                    label: "Email Address",
+                                    value: selectedEmployee.email,
+                                },
+                                {
+                                    label: "Phone Number",
+                                    value: selectedEmployee.phone,
+                                },
+                                {
+                                    label: "Home Address",
+                                    value: selectedEmployee.address,
+                                },
+                                {
+                                    label: "Educational Background",
+                                    value: selectedEmployee.education,
+                                },
+                                {
+                                    label: "Professional License No.",
+                                    value: selectedEmployee.licenseNo || "N/A",
+                                },
+                                {
+                                    label: "Date Hired",
+                                    value: selectedEmployee.dateHired,
+                                },
+                            ].map((item) => (
+                                <div
+                                    key={item.label}
+                                    className="bg-[#faf8f5] rounded-lg p-3"
+                                >
+                                    <p className="text-xs font-semibold text-[#8b8476] mb-1 uppercase tracking-wide">
+                                        {item.label}
+                                    </p>
+                                    <p className="text-sm text-[#2c2c2c] font-medium">
+                                        {item.value}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+
+                        {selectedEmployee.notes && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                <p className="text-sm font-semibold text-blue-800">
+                                    Notes:
+                                </p>
+                                <p className="text-sm text-blue-700 mt-1">
+                                    {selectedEmployee.notes}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                    <div className="p-6 border-t border-gray-200 flex flex-wrap gap-3">
+                        <button
+                            onClick={() => {
+                                setShowDetailModal(false);
+                                openEdit(selectedEmployee);
+                            }}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm"
+                        >
+                            Edit
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (showAddModal) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowAddModal(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Staff Management</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Add New Employee
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Create a new staff account • {schoolYear}
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Last Name
+                            </label>
+                            <input
+                                value={newEmployee.lastName}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        lastName: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. Dela Cruz"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                First Name
+                            </label>
+                            <input
+                                value={newEmployee.firstName}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        firstName: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. Juana"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Middle Name{" "}
+                                <span className="text-[#8b8476] font-normal">
+                                    (optional)
+                                </span>
+                            </label>
+                            <input
+                                value={newEmployee.middleName}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        middleName: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. Reyes"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Suffix
+                            </label>
+                            <select
+                                value={newEmployee.suffix}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        suffix: e.target.value,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black"
+                            >
+                                {SUFFIX_OPTIONS.map((s) => (
+                                    <option key={s || "none"} value={s}>
+                                        {s || "None"}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Address
+                            </label>
+                            <input
+                                value={newEmployee.address}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        address: e.target.value,
+                                    }))
+                                }
+                                placeholder="Home address"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Email Address
+                            </label>
+                            <input
+                                type="email"
+                                value={newEmployee.email}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        email: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. juana.delacruz@missionschool.edu.ph"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Phone
+                            </label>
+                            <input
+                                type="number"
+                                value={newEmployee.phone}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        phone: e.target.value,
+                                    }))
+                                }
+                                placeholder="09xxxxxxxxx"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Position
+                            </label>
+                            <select
+                                value={newEmployee.position}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        position: e.target
+                                            .value as typeof f.position,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            >
+                                <option value="">Select position</option>
+                                {ADD_POSITIONS.map((p) => (
+                                    <option key={p} value={p}>
+                                        {p}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Employment Type
+                            </label>
+                            <select
+                                value={newEmployee.employmentType}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        employmentType: e.target
+                                            .value as typeof f.employmentType,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            >
+                                <option value="">Select type</option>
+                                <option value="full-time">Full-time</option>
+                                <option value="part-time">Part-time</option>
+                                <option value="contractual">
+                                    Contractual
+                                </option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Date Hired
+                            </label>
+                            <input
+                                type="date"
+                                value={newEmployee.dateHired}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        dateHired: e.target.value,
+                                    }))
+                                }
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                    </div>
+                    {newEmployee.position === "Teacher" && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                    Subject
+                                </label>
+                                <select
+                                    value={newEmployee.subject}
+                                    onChange={(e) =>
+                                        setNewEmployee((f) => ({
+                                            ...f,
+                                            subject: e.target.value,
+                                        }))
+                                    }
+                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                >
+                                    {TEACHER_SUBJECTS.map((s) => (
+                                        <option key={s} value={s}>
+                                            {s}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Education
+                            </label>
+                            <input
+                                value={newEmployee.education}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        education: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. BSEd – Mathematics, Silliman University"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Professional License No. (optional)
+                            </label>
+                            <input
+                                value={newEmployee.licenseNo}
+                                onChange={(e) =>
+                                    setNewEmployee((f) => ({
+                                        ...f,
+                                        licenseNo: e.target.value,
+                                    }))
+                                }
+                                placeholder="e.g. LET-2024-1234"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                            />
+                        </div>
+                    </div>
+                    {addEmployeeError && (
+                        <p className="text-sm text-red-500">
+                            {addEmployeeError}
+                        </p>
+                    )}
+                    <div className="flex gap-3 pt-4 border-t border-gray-200">
+                        <button
+                            onClick={() => setShowAddModal(false)}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={addEmployee}
+                            disabled={addingEmployee}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                            {addingEmployee ? "Adding…" : "Add Employee"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -7476,414 +8429,6 @@ function StaffManagement({
                 )}
             </div>
 
-            {/* Detail Modal */}
-            {showDetailModal && selectedEmployee && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <Briefcase className="w-6 h-6" />
-                                <h3 className="text-xl font-semibold">
-                                    Employee Details
-                                </h3>
-                            </div>
-                            {/* <button onClick={() => setShowDetailModal(false)} className="p-1 hover:bg-white/20 rounded-lg">
-                <X className="w-5 h-5" />
-              </button> */}
-                        </div>
-                        <div className="p-6 space-y-5">
-                            <div className="flex items-start gap-4 pb-5 border-b border-gray-200">
-                                <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#7d1935] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
-                                    {initials(selectedEmployee.name)}
-                                </div>
-                                <div>
-                                    <h4 className="text-xl font-bold text-[#1a2b4a]">
-                                        {selectedEmployee.name}
-                                    </h4>
-                                    <p className="text-[#c9a961] font-medium">
-                                        {selectedEmployee.position} –{" "}
-                                        {selectedEmployee.department}
-                                    </p>
-                                    <span
-                                        className={`inline-flex items-center gap-1 mt-1 px-2.5 py-0.5 rounded-full text-xs font-semibold ${statusConfig[selectedEmployee.status].bg} ${statusConfig[selectedEmployee.status].text}`}
-                                    >
-                                        {
-                                            statusConfig[
-                                                selectedEmployee.status
-                                            ].label
-                                        }
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                {[
-                                    {
-                                        label: "Employee ID",
-                                        value: selectedEmployee.id,
-                                    },
-                                    {
-                                        label: "Email Address",
-                                        value: selectedEmployee.email,
-                                    },
-                                    {
-                                        label: "Phone Number",
-                                        value: selectedEmployee.phone,
-                                    },
-                                    {
-                                        label: "Home Address",
-                                        value: selectedEmployee.address,
-                                    },
-                                    {
-                                        label: "Educational Background",
-                                        value: selectedEmployee.education,
-                                    },
-                                    {
-                                        label: "Professional License No.",
-                                        value:
-                                            selectedEmployee.licenseNo || "N/A",
-                                    },
-                                    {
-                                        label: "Date Hired",
-                                        value: selectedEmployee.dateHired,
-                                    },
-                                ].map((item) => (
-                                    <div
-                                        key={item.label}
-                                        className="bg-[#faf8f5] rounded-lg p-3"
-                                    >
-                                        <p className="text-xs font-semibold text-[#8b8476] mb-1 uppercase tracking-wide">
-                                            {item.label}
-                                        </p>
-                                        <p className="text-sm text-[#2c2c2c] font-medium">
-                                            {item.value}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
-
-                            {selectedEmployee.notes && (
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                                    <p className="text-sm font-semibold text-blue-800">
-                                        Notes:
-                                    </p>
-                                    <p className="text-sm text-blue-700 mt-1">
-                                        {selectedEmployee.notes}
-                                    </p>
-                                </div>
-                            )}
-                        </div>
-                        <div className="p-6 border-t border-gray-200 flex flex-wrap gap-3">
-                            <button
-                                onClick={() => {
-                                    setShowDetailModal(false);
-                                    openEdit(selectedEmployee);
-                                }}
-                                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all text-sm"
-                            >
-                                Edit
-                            </button>
-                            <button
-                                onClick={() => setShowDetailModal(false)}
-                                className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm"
-                            >
-                                Close
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Add Employee Modal */}
-            {showAddModal && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between ">
-                            <div className="flex items-center gap-3">
-                                <UserPlus className="w-5 h-5" />
-                                <h3 className="text-lg font-semibold">
-                                    Add New Employee
-                                </h3>
-                            </div>
-                            <button
-                                onClick={() => setShowAddModal(false)}
-                                className="p-1 hover:bg-white/20 rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Last Name
-                                    </label>
-                                    <input
-                                        value={newEmployee.lastName}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                lastName: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. Dela Cruz"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        First Name
-                                    </label>
-                                    <input
-                                        value={newEmployee.firstName}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                firstName: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. Juana"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Middle Name{" "}
-                                        <span className="text-[#8b8476] font-normal">
-                                            (optional)
-                                        </span>
-                                    </label>
-                                    <input
-                                        value={newEmployee.middleName}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                middleName: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. Reyes"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Suffix
-                                    </label>
-                                    <select
-                                        value={newEmployee.suffix}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                suffix: e.target.value,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black"
-                                    >
-                                        {SUFFIX_OPTIONS.map((s) => (
-                                            <option key={s || "none"} value={s}>
-                                                {s || "None"}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Position
-                                    </label>
-                                    <select
-                                        value={newEmployee.position}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                position: e.target
-                                                    .value as typeof f.position,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    >
-                                        <option value="">
-                                            Select position
-                                        </option>
-                                        {ADD_POSITIONS.map((p) => (
-                                            <option key={p} value={p}>
-                                                {p}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                                {newEmployee.position === "Teacher" && (
-                                    <div>
-                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                            Subject
-                                        </label>
-                                        <select
-                                            value={newEmployee.subject}
-                                            onChange={(e) =>
-                                                setNewEmployee((f) => ({
-                                                    ...f,
-                                                    subject: e.target.value,
-                                                }))
-                                            }
-                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                        >
-                                            {TEACHER_SUBJECTS.map((s) => (
-                                                <option key={s} value={s}>
-                                                    {s}
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Email Address
-                                    </label>
-                                    <input
-                                        type="email"
-                                        value={newEmployee.email}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                email: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. juana.delacruz@missionschool.edu.ph"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Phone
-                                    </label>
-                                    <input
-                                        value={newEmployee.phone}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                phone: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="+63 9xx xxx xxxx"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Date Hired
-                                    </label>
-                                    <input
-                                        type="date"
-                                        value={newEmployee.dateHired}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                dateHired: e.target.value,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Employment Type
-                                    </label>
-                                    <select
-                                        value={newEmployee.employmentType}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                employmentType: e.target
-                                                    .value as typeof f.employmentType,
-                                            }))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    >
-                                        <option value="">Select type</option>
-                                        <option value="full-time">
-                                            Full-time
-                                        </option>
-                                        <option value="part-time">
-                                            Part-time
-                                        </option>
-                                        <option value="contractual">
-                                            Contractual
-                                        </option>
-                                    </select>
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Education
-                                    </label>
-                                    <input
-                                        value={newEmployee.education}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                education: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. BSEd – Mathematics, Silliman University"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Address
-                                    </label>
-                                    <input
-                                        value={newEmployee.address}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                address: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="Home address"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Professional License No. (optional)
-                                    </label>
-                                    <input
-                                        value={newEmployee.licenseNo}
-                                        onChange={(e) =>
-                                            setNewEmployee((f) => ({
-                                                ...f,
-                                                licenseNo: e.target.value,
-                                            }))
-                                        }
-                                        placeholder="e.g. LET-2024-1234"
-                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
-                                </div>
-                            </div>
-                            {addEmployeeError && (
-                                <p className="text-sm text-red-500">
-                                    {addEmployeeError}
-                                </p>
-                            )}
-                        </div>
-                        <div className="p-6 border-t border-gray-200 flex gap-3">
-                            <button
-                                onClick={() => setShowAddModal(false)}
-                                className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={addEmployee}
-                                disabled={addingEmployee}
-                                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                            >
-                                {addingEmployee ? "Adding…" : "Add Employee"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {newEmployeeCredentials && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
@@ -7923,16 +8468,6 @@ function StaffManagement({
                         </button>
                     </div>
                 </div>
-            )}
-
-            {/* Edit Employee Modal */}
-            {showEditModal && selectedEmployee && (
-                <EmployeeEditModal
-                    employee={selectedEmployee}
-                    departments={departments}
-                    onCancel={() => setShowEditModal(false)}
-                    onSave={saveEdit}
-                />
             )}
 
             {/* Delete Confirmation Modal */}
@@ -7997,15 +8532,23 @@ function EmployeeEditModal({
 }) {
     const [form, setForm] = useState({ ...employee });
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
-                <div className="sticky top-0 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <Edit className="w-5 h-5" />
-                        <h2 className="text-lg font-semibold">Edit Employee</h2>
-                    </div>
-                </div>
-                <div className="p-6 space-y-4">
+        <div className="space-y-6">
+            <button
+                onClick={onCancel}
+                className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+            >
+                <ArrowLeft className="w-5 h-5" />
+                <span>Back to Staff Management</span>
+            </button>
+            <div>
+                <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                    Edit Employee
+                </h1>
+                <p className="text-[#6b6456]">
+                    Update {employee.name}'s employee record
+                </p>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-black mb-1">
@@ -8156,7 +8699,6 @@ function EmployeeEditModal({
                             Save Changes
                         </button>
                     </div>
-                </div>
             </div>
         </div>
     );
@@ -8554,6 +9096,279 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
 
     const printedCount = idStudents.filter((s) => s.idPrinted).length;
     const notPrintedCount = idStudents.length - printedCount;
+
+    if (showEditStudentModal && editingStudent) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => {
+                        setShowEditStudentModal(false);
+                        setEditSaveError(null);
+                    }}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to ID Generation</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Edit Student Information
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Update the student's ID card details • {schoolYear}
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Full Name
+                            </label>
+                            <input
+                                type="text"
+                                value={editingStudent.name}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        name: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Student ID
+                            </label>
+                            <input
+                                type="text"
+                                value={editingStudent.id}
+                                disabled
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 font-mono text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Grade Level
+                            </label>
+                            <select
+                                value={editingStudent.grade}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        grade: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            >
+                                {gradeOrder.map((g) => (
+                                    <option key={g}>{g}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Date of Birth
+                            </label>
+                            <input
+                                type="date"
+                                value={editingStudent.dobRaw ?? ""}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        dobRaw: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Emergency Contact
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="e.g. 09171112222"
+                                value={editingStudent.emergencyContact ?? ""}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        emergencyContact: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Address
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="e.g. Tapon Norte, San Jose"
+                                value={editingStudent.address ?? ""}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        address: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Parent / Guardian
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="e.g. Analisa A. Cabal"
+                                value={editingStudent.guardianName ?? ""}
+                                onChange={(e) =>
+                                    setEditingStudent({
+                                        ...editingStudent,
+                                        guardianName: e.target.value,
+                                    })
+                                }
+                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
+                            />
+                        </div>
+                        <div className="col-span-2">
+                            <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                Student Photo
+                            </label>
+                            <div className="flex items-center gap-3">
+                                <div className="w-14 h-16 rounded-lg border-2 border-[#1a6b45] overflow-hidden bg-[#f4faf6] flex items-center justify-center shrink-0">
+                                    {editingStudent.photo ? (
+                                        <img
+                                            src={editingStudent.photo}
+                                            alt={editingStudent.name}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    ) : (
+                                        <User className="w-6 h-6 text-[#1a6b45]/40" />
+                                    )}
+                                </div>
+                                <label className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-[#1a6b45] text-[#1a6b45] rounded-lg text-sm font-medium hover:bg-[#f4faf6] transition-all cursor-pointer">
+                                    <Plus className="w-4 h-4" />
+                                    {editingStudent.photo
+                                        ? "Replace Photo"
+                                        : "Upload Photo"}
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                            const file = e.target.files?.[0];
+                                            if (!file) return;
+                                            const reader = new FileReader();
+                                            reader.onload = () =>
+                                                setEditingStudent((prev) =>
+                                                    prev
+                                                        ? {
+                                                              ...prev,
+                                                              photo: reader.result as string,
+                                                          }
+                                                        : prev,
+                                                );
+                                            reader.readAsDataURL(file);
+                                        }}
+                                    />
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    {editSaveError && (
+                        <p className="text-sm text-red-500">
+                            {editSaveError}
+                        </p>
+                    )}
+                    <div className="flex gap-3 pt-4 border-t border-gray-200">
+                        <button
+                            onClick={() => {
+                                setShowEditStudentModal(false);
+                                setEditSaveError(null);
+                            }}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={async () => {
+                                setSavingEdit(true);
+                                setEditSaveError(null);
+                                const { firstName, lastName } =
+                                    splitStudentName(editingStudent.name);
+                                const { error } = await supabase
+                                    .from("students")
+                                    .update({
+                                        first_name: firstName,
+                                        last_name: lastName,
+                                        grade_level: editingStudent.grade,
+                                        section: editingStudent.section,
+                                        date_of_birth:
+                                            editingStudent.dobRaw || null,
+                                        home_address:
+                                            editingStudent.address || null,
+                                        guardian_name:
+                                            editingStudent.guardianName ||
+                                            null,
+                                        guardian_phone:
+                                            editingStudent.emergencyContact ||
+                                            null,
+                                    })
+                                    .eq("id", editingStudent.id);
+                                if (error) {
+                                    setSavingEdit(false);
+                                    setEditSaveError(error.message);
+                                    return;
+                                }
+                                try {
+                                    const sy = await getSchoolYearByLabel(
+                                        schoolYear,
+                                    );
+                                    if (sy) {
+                                        await syncEnrollmentGradeSection(
+                                            editingStudent.id,
+                                            sy.id,
+                                            editingStudent.grade,
+                                            editingStudent.section,
+                                        );
+                                    }
+                                } catch (e: any) {
+                                    setSavingEdit(false);
+                                    setEditSaveError(
+                                        e?.message ||
+                                            "Failed to update the student's class roster.",
+                                    );
+                                    return;
+                                }
+                                setSavingEdit(false);
+                                const dobLabel = editingStudent.dobRaw
+                                    ? formatDate(editingStudent.dobRaw)
+                                    : editingStudent.dob;
+                                setIdStudents((prev) =>
+                                    prev.map((e) =>
+                                        e.id === editingStudent.id
+                                            ? {
+                                                  ...editingStudent,
+                                                  dob: dobLabel,
+                                              }
+                                            : e,
+                                    ),
+                                );
+                                setShowEditStudentModal(false);
+                            }}
+                            disabled={savingEdit}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl font-medium hover:shadow-lg transition-all disabled:opacity-60"
+                        >
+                            {savingEdit ? "Saving…" : "Save Changes"}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">
@@ -9030,285 +9845,6 @@ function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                 </div>
             )}
 
-            {/* Edit Student Modal */}
-            {showEditStudentModal && editingStudent && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col">
-                        <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between shrink-0">
-                            <div className="flex items-center gap-2">
-                                <Edit className="w-5 h-5" />
-                                <h2 className="text-lg font-semibold">
-                                    Edit Student Information
-                                </h2>
-                            </div>
-                            <button
-                                onClick={() => setShowEditStudentModal(false)}
-                                className="p-1 hover:bg-white/20 rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4 overflow-y-auto">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Full Name
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={editingStudent.name}
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                name: e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Student ID
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={editingStudent.id}
-                                        disabled
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 font-mono text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Grade Level
-                                    </label>
-                                    <select
-                                        value={editingStudent.grade}
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                grade: e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    >
-                                        {gradeOrder.map((g) => (
-                                            <option key={g}>{g}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Date of Birth
-                                    </label>
-                                    <input
-                                        type="date"
-                                        value={editingStudent.dobRaw ?? ""}
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                dobRaw: e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Emergency Contact
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. 09171112222"
-                                        value={
-                                            editingStudent.emergencyContact ??
-                                            ""
-                                        }
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                emergencyContact:
-                                                    e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Address
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Tapon Norte, San Jose"
-                                        value={editingStudent.address ?? ""}
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                address: e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Parent / Guardian
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="e.g. Analisa A. Cabal"
-                                        value={
-                                            editingStudent.guardianName ?? ""
-                                        }
-                                        onChange={(e) =>
-                                            setEditingStudent({
-                                                ...editingStudent,
-                                                guardianName: e.target.value,
-                                            })
-                                        }
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 focus:border-[#c9a961] text-black"
-                                    />
-                                </div>
-                                <div className="col-span-2">
-                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                        Student Photo
-                                    </label>
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-14 h-16 rounded-lg border-2 border-[#1a6b45] overflow-hidden bg-[#f4faf6] flex items-center justify-center shrink-0">
-                                            {editingStudent.photo ? (
-                                                <img
-                                                    src={editingStudent.photo}
-                                                    alt={editingStudent.name}
-                                                    className="w-full h-full object-cover"
-                                                />
-                                            ) : (
-                                                <User className="w-6 h-6 text-[#1a6b45]/40" />
-                                            )}
-                                        </div>
-                                        <label className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-[#1a6b45] text-[#1a6b45] rounded-lg text-sm font-medium hover:bg-[#f4faf6] transition-all cursor-pointer">
-                                            <Plus className="w-4 h-4" />
-                                            {editingStudent.photo
-                                                ? "Replace Photo"
-                                                : "Upload Photo"}
-                                            <input
-                                                type="file"
-                                                accept="image/*"
-                                                className="hidden"
-                                                onChange={(e) => {
-                                                    const file =
-                                                        e.target.files?.[0];
-                                                    if (!file) return;
-                                                    const reader =
-                                                        new FileReader();
-                                                    reader.onload = () =>
-                                                        setEditingStudent(
-                                                            (prev) =>
-                                                                prev
-                                                                    ? {
-                                                                          ...prev,
-                                                                          photo: reader.result as string,
-                                                                      }
-                                                                    : prev,
-                                                        );
-                                                    reader.readAsDataURL(file);
-                                                }}
-                                            />
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-                            {editSaveError && (
-                                <p className="text-sm text-red-500">
-                                    {editSaveError}
-                                </p>
-                            )}
-                        </div>
-                        <div className="flex gap-3 p-6 pt-4 border-t border-gray-200 shrink-0">
-                            <button
-                                onClick={() => {
-                                    setShowEditStudentModal(false);
-                                    setEditSaveError(null);
-                                }}
-                                className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={async () => {
-                                    setSavingEdit(true);
-                                    setEditSaveError(null);
-                                    const { firstName, lastName } =
-                                        splitStudentName(editingStudent.name);
-                                    const { error } = await supabase
-                                        .from("students")
-                                        .update({
-                                            first_name: firstName,
-                                            last_name: lastName,
-                                            grade_level: editingStudent.grade,
-                                            section: editingStudent.section,
-                                            date_of_birth:
-                                                editingStudent.dobRaw || null,
-                                            home_address:
-                                                editingStudent.address || null,
-                                            guardian_name:
-                                                editingStudent.guardianName ||
-                                                null,
-                                            guardian_phone:
-                                                editingStudent.emergencyContact ||
-                                                null,
-                                        })
-                                        .eq("id", editingStudent.id);
-                                    if (error) {
-                                        setSavingEdit(false);
-                                        setEditSaveError(error.message);
-                                        return;
-                                    }
-                                    try {
-                                        const sy =
-                                            await getSchoolYearByLabel(
-                                                schoolYear,
-                                            );
-                                        if (sy) {
-                                            await syncEnrollmentGradeSection(
-                                                editingStudent.id,
-                                                sy.id,
-                                                editingStudent.grade,
-                                                editingStudent.section,
-                                            );
-                                        }
-                                    } catch (e: any) {
-                                        setSavingEdit(false);
-                                        setEditSaveError(
-                                            e?.message ||
-                                                "Failed to update the student's class roster.",
-                                        );
-                                        return;
-                                    }
-                                    setSavingEdit(false);
-                                    const dobLabel = editingStudent.dobRaw
-                                        ? formatDate(editingStudent.dobRaw)
-                                        : editingStudent.dob;
-                                    setIdStudents((prev) =>
-                                        prev.map((e) =>
-                                            e.id === editingStudent.id
-                                                ? {
-                                                      ...editingStudent,
-                                                      dob: dobLabel,
-                                                  }
-                                                : e,
-                                        ),
-                                    );
-                                    setShowEditStudentModal(false);
-                                }}
-                                disabled={savingEdit}
-                                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-xl font-medium hover:shadow-lg transition-all disabled:opacity-60"
-                            >
-                                {savingEdit ? "Saving…" : "Save Changes"}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
@@ -12131,6 +12667,9 @@ function AcademicsSection({
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [scheduleConflicts, setScheduleConflicts] = useState<
+        string[] | null
+    >(null);
 
     const classSectionKey = (grade: string, section: string) =>
         `${grade}::${section}`;
@@ -12459,6 +12998,7 @@ function AcademicsSection({
 
     const handleOpen = (schedule?: TeacherSchedule) => {
         setSaveError(null);
+        setScheduleConflicts(null);
         if (schedule) {
             setForm({
                 teacher: schedule.teacher,
@@ -12472,6 +13012,92 @@ function AcademicsSection({
         setShowCreateModal(true);
     };
 
+    // Detects schedule conflicts among the slots about to be saved: the same teacher,
+    // class section, or room double-booked on an overlapping day/time. Existing rows
+    // belonging to the teacher being edited are excluded since handleSave replaces them.
+    const timesOverlap = (
+        aStart: string,
+        aEnd: string,
+        bStart: string,
+        bEnd: string,
+    ) =>
+        timeToMinutes(aStart) < timeToMinutes(bEnd) &&
+        timeToMinutes(bStart) < timeToMinutes(aEnd);
+    const daysOverlap = (a: string[], b: string[]) =>
+        a.some((d) => b.includes(d));
+
+    const findScheduleConflicts = (validSlots: SubjectSlot[]): string[] => {
+        const conflicts: string[] = [];
+        const teacherTrim = form.teacher.trim();
+        const existingRows = teacherSchedules
+            .filter((t) => t.teacher !== editingTeacherName)
+            .flatMap((t) => t.slots.map((s) => ({ ...s, teacher: t.teacher })));
+
+        validSlots.forEach((newSlot) => {
+            existingRows.forEach((exist) => {
+                if (!daysOverlap(newSlot.days, exist.days)) return;
+                if (
+                    !timesOverlap(
+                        newSlot.startTime,
+                        newSlot.endTime,
+                        exist.startTime,
+                        exist.endTime,
+                    )
+                )
+                    return;
+                if (
+                    exist.teacher.trim().toLowerCase() ===
+                    teacherTrim.toLowerCase()
+                ) {
+                    conflicts.push(
+                        `${teacherTrim} is already scheduled to teach ${exist.subject} at this time.`,
+                    );
+                } else if (
+                    exist.classSectionKey === newSlot.classSectionKey
+                ) {
+                    const [grade, section] =
+                        newSlot.classSectionKey.split("::");
+                    conflicts.push(
+                        `${grade} - ${section} already has ${exist.subject} with ${exist.teacher} at this time.`,
+                    );
+                } else if (
+                    newSlot.room &&
+                    exist.room &&
+                    newSlot.room.trim().toLowerCase() ===
+                        exist.room.trim().toLowerCase()
+                ) {
+                    conflicts.push(
+                        `Room ${newSlot.room} is already in use by ${exist.teacher} for ${exist.subject} at this time.`,
+                    );
+                }
+            });
+        });
+
+        // Check the slots being submitted against each other too (e.g. two subjects
+        // for the same teacher scheduled at an overlapping time).
+        for (let i = 0; i < validSlots.length; i++) {
+            for (let j = i + 1; j < validSlots.length; j++) {
+                const a = validSlots[i];
+                const b = validSlots[j];
+                if (!daysOverlap(a.days, b.days)) continue;
+                if (
+                    !timesOverlap(
+                        a.startTime,
+                        a.endTime,
+                        b.startTime,
+                        b.endTime,
+                    )
+                )
+                    continue;
+                conflicts.push(
+                    `${a.subject || "This subject"} and ${b.subject || "this subject"} overlap on the same day/time in this schedule.`,
+                );
+            }
+        }
+
+        return Array.from(new Set(conflicts));
+    };
+
     const handleSave = async () => {
         if (isArchivedYear || !schoolYearId) return;
         const validSlots = form.slots.filter(
@@ -12483,6 +13109,11 @@ function AcademicsSection({
                 s.endTime,
         );
         if (!form.teacher.trim() || validSlots.length === 0) return;
+        const conflicts = findScheduleConflicts(validSlots);
+        if (conflicts.length > 0) {
+            setScheduleConflicts(conflicts);
+            return;
+        }
         setSaving(true);
         setSaveError(null);
         try {
@@ -12556,6 +13187,321 @@ function AcademicsSection({
     const handleDeleteEvent = (id: number) => {
         setEvents((prev) => prev.filter((e) => e.id !== id));
     };
+    if (showCreateModal) {
+        return (
+                <div className="space-y-6">
+                    <div>
+                        <button
+                            onClick={() => setShowCreateModal(false)}
+                            className="flex items-center gap-1.5 text-sm font-medium text-[#1a2b4a] hover:underline mb-2"
+                        >
+                            <ChevronDown className="w-4 h-4 rotate-90" />
+                            Back to Schedules
+                        </button>
+                        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                            {editingTeacherName
+                                ? "Edit Schedule"
+                                : "Create Schedule"}
+                        </h1>
+                    </div>
+                    <div className="max-w-lg mx-auto">
+                        <div className="p-6 space-y-5">
+                            <div className="relative">
+                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                    Name of Teacher{" "}
+                                    <span className="text-red-400">*</span>
+                                </label>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                                    <input
+                                        value={form.teacher}
+                                        onChange={(e) => {
+                                            setTeacher(e.target.value);
+                                            setShowTeacherSuggestions(true);
+                                        }}
+                                        onFocus={() =>
+                                            setShowTeacherSuggestions(true)
+                                        }
+                                        onBlur={() =>
+                                            setTimeout(
+                                                () =>
+                                                    setShowTeacherSuggestions(
+                                                        false,
+                                                    ),
+                                                150,
+                                            )
+                                        }
+                                        placeholder="Search teacher by name..."
+                                        autoComplete="off"
+                                        className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                    />
+                                </div>
+                                {showTeacherSuggestions &&
+                                    form.teacher.trim() &&
+                                    teacherSuggestions.length > 0 && (
+                                        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto divide-y divide-gray-100">
+                                            {teacherSuggestions.map((t) => (
+                                                <button
+                                                    type="button"
+                                                    key={t.id}
+                                                    onMouseDown={(e) =>
+                                                        e.preventDefault()
+                                                    }
+                                                    onClick={() => {
+                                                        setTeacher(t.name);
+                                                        setShowTeacherSuggestions(
+                                                            false,
+                                                        );
+                                                    }}
+                                                    className="w-full text-left px-3 py-2 text-sm text-[#2c2c2c] hover:bg-[#faf8f5] transition-colors"
+                                                >
+                                                    {teacherOptionLabel(t)}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                                <label className="block text-sm font-medium text-[#6b6456]">
+                                    Subjects, Days & Time{" "}
+                                    <span className="text-red-400">*</span>
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={addSlot}
+                                    className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
+                                >
+                                    <Plus className="w-3.5 h-3.5" /> Add Another
+                                    Subject
+                                </button>
+                            </div>
+
+                            <div className="space-y-4">
+                                {form.slots.map((slot, idx) => (
+                                    <div
+                                        key={slot.id}
+                                        className="border border-gray-200 rounded-xl p-4 space-y-3 relative"
+                                    >
+                                        {form.slots.length > 1 && (
+                                            <button
+                                                type="button"
+                                                onClick={() =>
+                                                    removeSlot(slot.id)
+                                                }
+                                                className="absolute top-3 right-3 p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                                                title="Remove Subject"
+                                            >
+                                                <Trash2 className="w-4 h-4 text-red-400" />
+                                            </button>
+                                        )}
+                                        <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide">
+                                            Subject {idx + 1}
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="col-span-2">
+                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                    Class{" "}
+                                                    <span className="text-red-400">
+                                                        *
+                                                    </span>
+                                                </label>
+                                                <select
+                                                    value={slot.classSectionKey}
+                                                    onChange={(e) =>
+                                                        updateSlot(
+                                                            slot.id,
+                                                            "classSectionKey",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black"
+                                                >
+                                                    <option value="">
+                                                        Select class…
+                                                    </option>
+                                                    {classSections.map((cs) => (
+                                                        <option
+                                                            key={classSectionKey(
+                                                                cs.grade,
+                                                                cs.section,
+                                                            )}
+                                                            value={classSectionKey(
+                                                                cs.grade,
+                                                                cs.section,
+                                                            )}
+                                                        >
+                                                            {cs.grade} -{" "}
+                                                            {cs.section}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="col-span-2 sm:col-span-1">
+                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                    Subject
+                                                </label>
+                                                <select
+                                                    value={slot.subject}
+                                                    onChange={(e) =>
+                                                        updateSlot(
+                                                            slot.id,
+                                                            "subject",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    disabled={
+                                                        !slot.classSectionKey
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black disabled:bg-gray-50 disabled:text-[#8b8476]"
+                                                >
+                                                    <option value="">
+                                                        {slot.classSectionKey
+                                                            ? "Select subject…"
+                                                            : "Select a class first"}
+                                                    </option>
+                                                    {subjectOptionsForSlot(
+                                                        slot.classSectionKey,
+                                                        form.teacher,
+                                                    ).map((name) => (
+                                                        <option
+                                                            key={name}
+                                                            value={name}
+                                                        >
+                                                            {name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                {slot.classSectionKey &&
+                                                    subjectOptionsForSlot(
+                                                        slot.classSectionKey,
+                                                        form.teacher,
+                                                    ).length === 0 && (
+                                                        <p className="text-[10px] text-[#8b8476] mt-1">
+                                                            {form.teacher.trim()
+                                                                ? "This teacher isn't assigned to any subject in this class."
+                                                                : "No subjects assigned to this class yet."}
+                                                        </p>
+                                                    )}
+                                            </div>
+                                            <div className="col-span-2 sm:col-span-1">
+                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                    Room
+                                                </label>
+                                                <select
+                                                    value={slot.room}
+                                                    onChange={(e) =>
+                                                        updateSlot(
+                                                            slot.id,
+                                                            "room",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                                >
+                                                    <option value="">Select a room…</option>
+                                                    {roomCatalog.map((r) => (
+                                                        <option key={r.id} value={r.name}>{r.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                    Start Time
+                                                </label>
+                                                <input
+                                                    type="time"
+                                                    value={slot.startTime}
+                                                    onChange={(e) =>
+                                                        updateSlot(
+                                                            slot.id,
+                                                            "startTime",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
+                                                    End Time
+                                                </label>
+                                                <input
+                                                    type="time"
+                                                    value={slot.endTime}
+                                                    onChange={(e) =>
+                                                        updateSlot(
+                                                            slot.id,
+                                                            "endTime",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-[#6b6456] mb-2">
+                                                Days
+                                            </label>
+                                            <div className="flex gap-1.5 flex-wrap">
+                                                {WEEK_DAYS.map((d) => (
+                                                    <button
+                                                        key={d}
+                                                        type="button"
+                                                        onClick={() =>
+                                                            toggleSlotDay(
+                                                                slot.id,
+                                                                d,
+                                                            )
+                                                        }
+                                                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border-2 transition-all ${
+                                                            slot.days.includes(
+                                                                d,
+                                                            )
+                                                                ? "bg-[#1a2b4a] border-[#1a2b4a] text-white"
+                                                                : "bg-white border-gray-200 text-[#6b6456] hover:border-[#1a2b4a]/40"
+                                                        }`}
+                                                    >
+                                                        {d}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            {saveError && (
+                                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                                    <AlertCircle className="w-4 h-4 shrink-0" />{" "}
+                                    {saveError}
+                                </div>
+                            )}
+                        </div>
+                        <div className="p-6 border-t border-gray-200 flex gap-3">
+                            <button
+                                onClick={handleSave}
+                                disabled={saving}
+                                className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all disabled:opacity-60"
+                            >
+                                {saving
+                                    ? "Saving…"
+                                    : editingTeacherName
+                                      ? "Save Changes"
+                                      : "Create Schedule"}
+                            </button>
+                            <button
+                                onClick={() => setShowCreateModal(false)}
+                                className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-xl font-medium hover:border-[#c9a961] transition-all"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+        );
+    }
+
 
     return (
         <div className="space-y-6">
@@ -12855,313 +13801,38 @@ function AcademicsSection({
         </div>
       </div> */}
 
-            {/* Create Schedule Modal */}
-            {showCreateModal && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-white p-6 border-b border-gray-200 flex items-center justify-between rounded-t-2xl z-1">
-                            <h3 className="text-xl font-bold text-[#1a2b4a]">
-                                {editingTeacherName
-                                    ? "Edit Schedule"
-                                    : "Create Schedule"}
-                            </h3>
-                            <button
-                                onClick={() => setShowCreateModal(false)}
-                                className="p-2 hover:bg-gray-100 rounded-lg"
-                            >
-                                <X className="w-5 h-5 text-[#8b8476]" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-5">
-                            <div className="relative">
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Name of Teacher{" "}
-                                    <span className="text-red-400">*</span>
-                                </label>
-                                <div className="relative">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
-                                    <input
-                                        value={form.teacher}
-                                        onChange={(e) => {
-                                            setTeacher(e.target.value);
-                                            setShowTeacherSuggestions(true);
-                                        }}
-                                        onFocus={() =>
-                                            setShowTeacherSuggestions(true)
-                                        }
-                                        onBlur={() =>
-                                            setTimeout(
-                                                () =>
-                                                    setShowTeacherSuggestions(
-                                                        false,
-                                                    ),
-                                                150,
-                                            )
-                                        }
-                                        placeholder="Search teacher by name..."
-                                        autoComplete="off"
-                                        className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                    />
+            {/* Schedule Conflict Notice — blocks saving until the conflicting slot is fixed */}
+            {scheduleConflicts && scheduleConflicts.length > 0 && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-center gap-3">
+                                <div className="w-11 h-11 bg-red-100 rounded-full flex items-center justify-center shrink-0">
+                                    <AlertCircle className="w-6 h-6 text-red-500" />
                                 </div>
-                                {showTeacherSuggestions &&
-                                    form.teacher.trim() &&
-                                    teacherSuggestions.length > 0 && (
-                                        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-40 overflow-y-auto divide-y divide-gray-100">
-                                            {teacherSuggestions.map((t) => (
-                                                <button
-                                                    type="button"
-                                                    key={t.id}
-                                                    onMouseDown={(e) =>
-                                                        e.preventDefault()
-                                                    }
-                                                    onClick={() => {
-                                                        setTeacher(t.name);
-                                                        setShowTeacherSuggestions(
-                                                            false,
-                                                        );
-                                                    }}
-                                                    className="w-full text-left px-3 py-2 text-sm text-[#2c2c2c] hover:bg-[#faf8f5] transition-colors"
-                                                >
-                                                    {teacherOptionLabel(t)}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    )}
+                                <h3 className="text-lg font-bold text-[#1a2b4a]">
+                                    Schedule Conflict
+                                </h3>
                             </div>
-
-                            <div className="flex items-center justify-between">
-                                <label className="block text-sm font-medium text-[#6b6456]">
-                                    Subjects, Days & Time{" "}
-                                    <span className="text-red-400">*</span>
-                                </label>
-                                <button
-                                    type="button"
-                                    onClick={addSlot}
-                                    className="flex items-center gap-1 text-xs font-semibold text-[#1a2b4a] hover:underline"
-                                >
-                                    <Plus className="w-3.5 h-3.5" /> Add Another
-                                    Subject
-                                </button>
-                            </div>
-
-                            <div className="space-y-4">
-                                {form.slots.map((slot, idx) => (
-                                    <div
-                                        key={slot.id}
-                                        className="border border-gray-200 rounded-xl p-4 space-y-3 relative"
+                            <ul className="space-y-2">
+                                {scheduleConflicts.map((c, i) => (
+                                    <li
+                                        key={i}
+                                        className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3"
                                     >
-                                        {form.slots.length > 1 && (
-                                            <button
-                                                type="button"
-                                                onClick={() =>
-                                                    removeSlot(slot.id)
-                                                }
-                                                className="absolute top-3 right-3 p-1.5 hover:bg-red-50 rounded-lg transition-colors"
-                                                title="Remove Subject"
-                                            >
-                                                <Trash2 className="w-4 h-4 text-red-400" />
-                                            </button>
-                                        )}
-                                        <p className="text-xs font-semibold text-[#8b8476] uppercase tracking-wide">
-                                            Subject {idx + 1}
-                                        </p>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div className="col-span-2">
-                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
-                                                    Class{" "}
-                                                    <span className="text-red-400">
-                                                        *
-                                                    </span>
-                                                </label>
-                                                <select
-                                                    value={slot.classSectionKey}
-                                                    onChange={(e) =>
-                                                        updateSlot(
-                                                            slot.id,
-                                                            "classSectionKey",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black"
-                                                >
-                                                    <option value="">
-                                                        Select class…
-                                                    </option>
-                                                    {classSections.map((cs) => (
-                                                        <option
-                                                            key={classSectionKey(
-                                                                cs.grade,
-                                                                cs.section,
-                                                            )}
-                                                            value={classSectionKey(
-                                                                cs.grade,
-                                                                cs.section,
-                                                            )}
-                                                        >
-                                                            {cs.grade} -{" "}
-                                                            {cs.section}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div className="col-span-2 sm:col-span-1">
-                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
-                                                    Subject
-                                                </label>
-                                                <select
-                                                    value={slot.subject}
-                                                    onChange={(e) =>
-                                                        updateSlot(
-                                                            slot.id,
-                                                            "subject",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    disabled={
-                                                        !slot.classSectionKey
-                                                    }
-                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 bg-white text-black disabled:bg-gray-50 disabled:text-[#8b8476]"
-                                                >
-                                                    <option value="">
-                                                        {slot.classSectionKey
-                                                            ? "Select subject…"
-                                                            : "Select a class first"}
-                                                    </option>
-                                                    {subjectOptionsForSlot(
-                                                        slot.classSectionKey,
-                                                        form.teacher,
-                                                    ).map((name) => (
-                                                        <option
-                                                            key={name}
-                                                            value={name}
-                                                        >
-                                                            {name}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                                {slot.classSectionKey &&
-                                                    subjectOptionsForSlot(
-                                                        slot.classSectionKey,
-                                                        form.teacher,
-                                                    ).length === 0 && (
-                                                        <p className="text-[10px] text-[#8b8476] mt-1">
-                                                            {form.teacher.trim()
-                                                                ? "This teacher isn't assigned to any subject in this class."
-                                                                : "No subjects assigned to this class yet."}
-                                                        </p>
-                                                    )}
-                                            </div>
-                                            <div className="col-span-2 sm:col-span-1">
-                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
-                                                    Room
-                                                </label>
-                                                <select
-                                                    value={slot.room}
-                                                    onChange={(e) =>
-                                                        updateSlot(
-                                                            slot.id,
-                                                            "room",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                                >
-                                                    <option value="">Select a room…</option>
-                                                    {roomCatalog.map((r) => (
-                                                        <option key={r.id} value={r.name}>{r.name}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
-                                                    Start Time
-                                                </label>
-                                                <input
-                                                    type="time"
-                                                    value={slot.startTime}
-                                                    onChange={(e) =>
-                                                        updateSlot(
-                                                            slot.id,
-                                                            "startTime",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-medium text-[#6b6456] mb-1">
-                                                    End Time
-                                                </label>
-                                                <input
-                                                    type="time"
-                                                    value={slot.endTime}
-                                                    onChange={(e) =>
-                                                        updateSlot(
-                                                            slot.id,
-                                                            "endTime",
-                                                            e.target.value,
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a2b4a]/20 text-black"
-                                                />
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-medium text-[#6b6456] mb-2">
-                                                Days
-                                            </label>
-                                            <div className="flex gap-1.5 flex-wrap">
-                                                {WEEK_DAYS.map((d) => (
-                                                    <button
-                                                        key={d}
-                                                        type="button"
-                                                        onClick={() =>
-                                                            toggleSlotDay(
-                                                                slot.id,
-                                                                d,
-                                                            )
-                                                        }
-                                                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border-2 transition-all ${
-                                                            slot.days.includes(
-                                                                d,
-                                                            )
-                                                                ? "bg-[#1a2b4a] border-[#1a2b4a] text-white"
-                                                                : "bg-white border-gray-200 text-[#6b6456] hover:border-[#1a2b4a]/40"
-                                                        }`}
-                                                    >
-                                                        {d}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
+                                        {c}
+                                    </li>
                                 ))}
-                            </div>
-                            {saveError && (
-                                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                                    <AlertCircle className="w-4 h-4 shrink-0" />{" "}
-                                    {saveError}
-                                </div>
-                            )}
-                        </div>
-                        <div className="p-6 border-t border-gray-200 flex gap-3">
+                            </ul>
+                            <p className="text-xs text-[#8b8476]">
+                                Adjust the day, time, room, or class before
+                                saving this schedule.
+                            </p>
                             <button
-                                onClick={handleSave}
-                                disabled={saving}
-                                className="flex-1 px-6 py-3 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all disabled:opacity-60"
+                                onClick={() => setScheduleConflicts(null)}
+                                className="w-full px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all"
                             >
-                                {saving
-                                    ? "Saving…"
-                                    : editingTeacherName
-                                      ? "Save Changes"
-                                      : "Create Schedule"}
-                            </button>
-                            <button
-                                onClick={() => setShowCreateModal(false)}
-                                className="flex-1 px-6 py-3 border-2 border-gray-200 text-[#2c2c2c] rounded-xl font-medium hover:border-[#c9a961] transition-all"
-                            >
-                                Cancel
+                                Got it
                             </button>
                         </div>
                     </div>
@@ -16470,98 +17141,23 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
         setShowEditModal(false);
     };
 
-    return (
-        <div className="space-y-6">
-            <div>
-                <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
-                    Grade Records (TOR)
-                </h1>
-                <p className="text-[#6b6456]">
-                    Look up a student's grade history and prepare Transcript of
-                    Records requests • {schoolYear}
-                </p>
-            </div>
+    if (selected) {
+        return (
+                <div className="space-y-6">
+                    <div>
+                        <button
+                            onClick={() => setSelected(null)}
+                            className="flex items-center gap-1.5 text-sm font-medium text-[#1a2b4a] hover:underline mb-2"
+                        >
+                            <ChevronDown className="w-4 h-4 rotate-90" />
+                            Back to Grade Records
+                        </button>
+                        <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                            Transcript of Records
+                        </h1>
+                    </div>
 
-            {/* Search */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b8476]" />
-                    <input
-                        type="text"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search by family name or student ID..."
-                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a4a4a]/20  text-[15px] text-[#000000]"
-                    />
-                </div>
-            </div>
-
-            {/* Results */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-200">
-                    <h3 className="font-semibold text-[#1a2b4a]">
-                        Students{" "}
-                        <span className="text-sm font-normal text-[#8b8476]">
-                            ({results.length})
-                        </span>
-                    </h3>
-                </div>
-                <div className="divide-y divide-gray-200">
-                    {loading ? (
-                        <div className="px-6 py-10 text-center text-[#8b8476] text-sm">
-                            Loading students...
-                        </div>
-                    ) : results.length === 0 ? (
-                        <div className="px-6 py-10 text-center text-[#8b8476] text-sm">
-                            No students found.
-                        </div>
-                    ) : (
-                        results.map((s) => (
-                            <div
-                                key={s.id}
-                                className="px-6 py-3 flex items-center justify-between hover:bg-[#faf8f5] transition-colors"
-                            >
-                                <div>
-                                    <p className="text-sm font-medium text-[#2c2c2c]">
-                                        {formatFamilyNameFirst(s.name)}
-                                    </p>
-                                    <p className="text-xs text-[#8b8476] font-mono">
-                                        {s.id} • {s.currentGrade} —{" "}
-                                        {s.currentSection}
-                                    </p>
-                                </div>
-                                <button
-                                    onClick={() => setSelected(s)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-[#6b6456] rounded-lg text-xs font-medium hover:border-[#1a2b4a] hover:bg-white transition-all"
-                                >
-                                    <Eye className="w-3.5 h-3.5" /> Preview TOR
-                                </button>
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-
-            {/* TOR Preview */}
-            {selected && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto scrollbar-none">
-                        <div className="sticky top-0 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between z-10">
-                            <div className="flex items-center gap-3">
-                                <FileCheck className="w-5 h-5" />
-                                <h2 className="text-lg font-semibold">
-                                    Transcript of Records
-                                </h2>
-                            </div>
-                            <button
-                                onClick={() => setSelected(null)}
-                                className="p-1 hover:bg-white/20 rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-
-                        <div className="p-6 space-y-5">
+                    <div className="max-w-2xl mx-auto space-y-5">
                             <div className="grid grid-cols-2 gap-4 pb-4 border-b border-gray-200">
                                 <div>
                                     <p className="text-xs text-[#8b8476]">
@@ -16778,10 +17374,82 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                                     {torGenerating === "download" ? "Generating…" : "Download"}
                                 </button>
                             </div>
-                        </div>
                     </div>
                 </div>
-            )}
+        );
+    }
+    return (
+        <div className="space-y-6">
+            <div>
+                <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                    Grade Records (TOR)
+                </h1>
+                <p className="text-[#6b6456]">
+                    Look up a student's grade history and prepare Transcript of
+                    Records requests • {schoolYear}
+                </p>
+            </div>
+
+            {/* Search */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8b8476]" />
+                    <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search by family name or student ID..."
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a4a4a]/20  text-[15px] text-[#000000]"
+                    />
+                </div>
+            </div>
+
+            {/* Results */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-200">
+                    <h3 className="font-semibold text-[#1a2b4a]">
+                        Students{" "}
+                        <span className="text-sm font-normal text-[#8b8476]">
+                            ({results.length})
+                        </span>
+                    </h3>
+                </div>
+                <div className="divide-y divide-gray-200">
+                    {loading ? (
+                        <div className="px-6 py-10 text-center text-[#8b8476] text-sm">
+                            Loading students...
+                        </div>
+                    ) : results.length === 0 ? (
+                        <div className="px-6 py-10 text-center text-[#8b8476] text-sm">
+                            No students found.
+                        </div>
+                    ) : (
+                        results.map((s) => (
+                            <div
+                                key={s.id}
+                                className="px-6 py-3 flex items-center justify-between hover:bg-[#faf8f5] transition-colors"
+                            >
+                                <div>
+                                    <p className="text-sm font-medium text-[#2c2c2c]">
+                                        {formatFamilyNameFirst(s.name)}
+                                    </p>
+                                    <p className="text-xs text-[#8b8476] font-mono">
+                                        {s.id} • {s.currentGrade} —{" "}
+                                        {s.currentSection}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setSelected(s)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-[#6b6456] rounded-lg text-xs font-medium hover:border-[#1a2b4a] hover:bg-white transition-all"
+                                >
+                                    <Eye className="w-3.5 h-3.5" /> Preview TOR
+                                </button>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+
 
             {/* Edit Student Info Modal (grades are never editable here) */}
             {showEditModal && selected && (
