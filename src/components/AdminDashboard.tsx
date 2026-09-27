@@ -17354,9 +17354,12 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                                 </div>
                             )}
                             <div className="flex gap-3 pt-2 border-t border-gray-200">
-                                {/* <button onClick={openEdit} className="flex-1 px-4 py-2.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg font-medium hover:bg-[#fdf9f0] transition-all text-sm flex items-center justify-center gap-1.5">
-                  <Edit className="w-4 h-4" /> Edit Student Info
-                </button> */}
+                                <button
+                                    onClick={openEdit}
+                                    className="flex-1 px-4 py-2.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg font-medium hover:bg-[#fdf9f0] transition-all text-sm flex items-center justify-center gap-1.5"
+                                >
+                                    <Edit className="w-4 h-4" /> Edit Student Info
+                                </button>
                                 <button
                                     onClick={handlePrintTor}
                                     disabled={torGenerating !== null}
@@ -17375,6 +17378,107 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                                 </button>
                             </div>
                     </div>
+
+                    {/* Edit Student Info Modal (grades are never editable here) */}
+                    {showEditModal && selected && (
+                        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+                                <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <Edit className="w-5 h-5" />
+                                        <h3 className="text-lg font-semibold">
+                                            Edit Student Info
+                                        </h3>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowEditModal(false)}
+                                        className="p-1 hover:bg-white/20 rounded-lg"
+                                    >
+                                        <X className="w-5 h-5" />
+                                    </button>
+                                </div>
+                                <div className="p-6 space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                            Full Name
+                                        </label>
+                                        <input
+                                            value={selected.name}
+                                            disabled
+                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-[#8b8476]"
+                                        />
+                                        <p className="text-xs text-[#8b8476] mt-1">
+                                            Edit the student's name from Student
+                                            Management.
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                            Birthdate
+                                        </label>
+                                        <input
+                                            type="date"
+                                            value={editForm.birthdate}
+                                            onChange={(e) =>
+                                                setEditForm((f) => ({
+                                                    ...f,
+                                                    birthdate: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                            Address
+                                        </label>
+                                        <input
+                                            value={editForm.address}
+                                            onChange={(e) =>
+                                                setEditForm((f) => ({
+                                                    ...f,
+                                                    address: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                            Guardian Name
+                                        </label>
+                                        <input
+                                            value={editForm.guardianName}
+                                            onChange={(e) =>
+                                                setEditForm((f) => ({
+                                                    ...f,
+                                                    guardianName: e.target.value,
+                                                }))
+                                            }
+                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
+                                        />
+                                    </div>
+                                    <p className="text-xs text-[#8b8476] italic">
+                                        Subject grades cannot be modified from here.
+                                    </p>
+                                    <div className="flex gap-3 pt-2 border-t border-gray-200">
+                                        <button
+                                            onClick={() => setShowEditModal(false)}
+                                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={saveEdit}
+                                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all"
+                                        >
+                                            Save Changes
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
         );
     }
@@ -17449,108 +17553,6 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                     )}
                 </div>
             </div>
-
-
-            {/* Edit Student Info Modal (grades are never editable here) */}
-            {showEditModal && selected && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-                        <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                                <Edit className="w-5 h-5" />
-                                <h3 className="text-lg font-semibold">
-                                    Edit Student Info
-                                </h3>
-                            </div>
-                            <button
-                                onClick={() => setShowEditModal(false)}
-                                className="p-1 hover:bg-white/20 rounded-lg"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Full Name
-                                </label>
-                                <input
-                                    value={selected.name}
-                                    disabled
-                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-[#8b8476]"
-                                />
-                                <p className="text-xs text-[#8b8476] mt-1">
-                                    Edit the student's name from Student
-                                    Management.
-                                </p>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Birthdate
-                                </label>
-                                <input
-                                    type="date"
-                                    value={editForm.birthdate}
-                                    onChange={(e) =>
-                                        setEditForm((f) => ({
-                                            ...f,
-                                            birthdate: e.target.value,
-                                        }))
-                                    }
-                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Address
-                                </label>
-                                <input
-                                    value={editForm.address}
-                                    onChange={(e) =>
-                                        setEditForm((f) => ({
-                                            ...f,
-                                            address: e.target.value,
-                                        }))
-                                    }
-                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                    Guardian Name
-                                </label>
-                                <input
-                                    value={editForm.guardianName}
-                                    onChange={(e) =>
-                                        setEditForm((f) => ({
-                                            ...f,
-                                            guardianName: e.target.value,
-                                        }))
-                                    }
-                                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                />
-                            </div>
-                            <p className="text-xs text-[#8b8476] italic">
-                                Subject grades cannot be modified from here.
-                            </p>
-                            <div className="flex gap-3 pt-2 border-t border-gray-200">
-                                <button
-                                    onClick={() => setShowEditModal(false)}
-                                    className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={saveEdit}
-                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all"
-                                >
-                                    Save Changes
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
