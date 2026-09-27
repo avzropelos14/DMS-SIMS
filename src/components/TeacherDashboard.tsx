@@ -899,6 +899,122 @@ function MyClasses({ user, schoolYear }: any) {
     window.open(doc.output('bloburl') as unknown as string, '_blank');
   };
 
+  // Current Year Grade Report — dedicated page (replaces the old "View" modal on
+  // an advisory class's student roster).
+  if (showCurrentReport && selectedStudent && currentReportData) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <button
+              onClick={() => setShowCurrentReport(false)}
+              className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] mb-3 font-medium"
+            >
+              <X className="w-5 h-5" />
+              <span>Back to Class Details</span>
+            </button>
+            <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Current Year Grade Report</h1>
+            <p className="text-[#6b6456]">{selectedStudent.student} ({selectedStudent.studentId})</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handlePrintReport}
+              className="flex items-center gap-2 px-4 py-2 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all"
+            >
+              <Printer className="w-4 h-4" />
+              Print
+            </button>
+            <button
+              onClick={handleDownloadCurrentReportPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-[#7d1935] text-white rounded-lg transition-all"
+            >
+              <Download className="w-4 h-4" />
+              Download PDF
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          {(() => {
+            const currentData = currentReportData;
+            return (
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="bg-[#faf8f5] p-4 border-b border-gray-200">
+                  <h3 className="font-bold text-[#1a2b4a]">{currentData.year} - {currentData.grade}</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Subject</th>
+                        <th className="text-left px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Teacher</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q1</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q2</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q3</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q4</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Final</th>
+                        <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {currentData.subjects.length === 0 && (
+                        <tr><td colSpan={8} className="px-4 py-6 text-center text-sm text-[#8b8476]">No subjects found for this student's section.</td></tr>
+                      )}
+                      {currentData.subjects.map((subject: any, index: number) => (
+                        <tr key={index}>
+                          <td className="px-4 py-3 text-sm font-medium text-[#2c2c2c]">{subject.subject}</td>
+                          <td className="px-4 py-3 text-sm text-[#6b6456]">{subject.teacher}</td>
+                          <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q1 ?? '—'}</td>
+                          <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q2 ?? '—'}</td>
+                          <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q3 ?? '—'}</td>
+                          <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q4 ?? '—'}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-[#c9a961]/10 text-[#c9a961]">
+                              {subject.final ?? '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
+                              getRemarks(subject.final) === 'Passed'
+                                ? 'bg-green-100 text-green-700'
+                                : getRemarks(subject.final) === 'Failed'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {getRemarks(subject.final)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                      {currentData.subjects.length > 0 && (() => {
+                        const finals = currentData.subjects
+                          .map((s: any) => s.final)
+                          .filter((v: any): v is number => v !== null && v !== undefined);
+                        const overallGPA = finals.length
+                          ? (finals.reduce((sum: number, f: number) => sum + f, 0) / finals.length).toFixed(1)
+                          : '—';
+                        return (
+                          <tr className="bg-[#faf8f5]">
+                            <td className="px-4 py-3 text-sm font-bold text-[#1a2b4a]" colSpan={6}>Overall GPA</td>
+                            <td className="px-4 py-3 text-center" colSpan={2}>
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#1a2b4a] text-white">
+                                {overallGPA}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+    );
+  }
+
   // If a class is selected, show the detailed view with grades
   if (selectedClass) {
     const classInfo = allClasses.find(c => c.id === selectedClass);
@@ -1303,120 +1419,6 @@ function MyClasses({ user, schoolYear }: any) {
                     </div>
                   </div>
                 ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Current Report Modal */}
-        {showCurrentReport && selectedStudent && currentReportData && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto scrollbar-none">
-              <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-bold text-[#1a2b4a]">Current Year Grade Report</h2>
-                  <p className="text-sm text-[#6b6456]">{selectedStudent.student} ({selectedStudent.studentId})</p>
-                </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={handlePrintReport}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all"
-                  >
-                    <Printer className="w-4 h-4" />
-                    Print
-                  </button>
-                  <button 
-                    onClick={handleDownloadCurrentReportPDF}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#7d1935] text-white rounded-lg transition-all"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download PDF
-                  </button>
-                  <button 
-                    onClick={() => setShowCurrentReport(false)}
-                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-6">
-                {(() => {
-                  const currentData = currentReportData;
-                  return (
-                    <div className="border border-gray-200 rounded-lg overflow-hidden">
-                      <div className="bg-[#faf8f5] p-4 border-b border-gray-200">
-                        <h3 className="font-bold text-[#1a2b4a]">{currentData.year} - {currentData.grade}</h3>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="text-left px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Subject</th>
-                              <th className="text-left px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Teacher</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q1</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q2</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q3</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Q4</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Final</th>
-                              <th className="text-center px-4 py-3 text-sm font-semibold text-[#1a2b4a]">Remarks</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-200">
-                            {currentData.subjects.length === 0 && (
-                              <tr><td colSpan={8} className="px-4 py-6 text-center text-sm text-[#8b8476]">No subjects found for this student's section.</td></tr>
-                            )}
-                            {currentData.subjects.map((subject: any, index: number) => (
-                              <tr key={index}>
-                                <td className="px-4 py-3 text-sm font-medium text-[#2c2c2c]">{subject.subject}</td>
-                                <td className="px-4 py-3 text-sm text-[#6b6456]">{subject.teacher}</td>
-                                <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q1 ?? '—'}</td>
-                                <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q2 ?? '—'}</td>
-                                <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q3 ?? '—'}</td>
-                                <td className="px-4 py-3 text-sm text-center text-[#6b6456]">{subject.q4 ?? '—'}</td>
-                                <td className="px-4 py-3 text-center">
-                                  <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-[#c9a961]/10 text-[#c9a961]">
-                                    {subject.final ?? '—'}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3 text-center">
-                                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${
-                                    getRemarks(subject.final) === 'Passed'
-                                      ? 'bg-green-100 text-green-700'
-                                      : getRemarks(subject.final) === 'Failed'
-                                      ? 'bg-red-100 text-red-700'
-                                      : 'bg-gray-100 text-gray-600'
-                                  }`}>
-                                    {getRemarks(subject.final)}
-                                  </span>
-                                </td>
-                              </tr>
-                            ))}
-                            {currentData.subjects.length > 0 && (() => {
-                              const finals = currentData.subjects
-                                .map((s: any) => s.final)
-                                .filter((v: any): v is number => v !== null && v !== undefined);
-                              const overallGPA = finals.length
-                                ? (finals.reduce((sum: number, f: number) => sum + f, 0) / finals.length).toFixed(1)
-                                : '—';
-                              return (
-                                <tr className="bg-[#faf8f5]">
-                                  <td className="px-4 py-3 text-sm font-bold text-[#1a2b4a]" colSpan={6}>Overall GPA</td>
-                                  <td className="px-4 py-3 text-center" colSpan={2}>
-                                    <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-bold bg-[#1a2b4a] text-white">
-                                      {overallGPA}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            })()}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
             </div>
           </div>

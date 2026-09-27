@@ -3376,6 +3376,7 @@ function StudentManagement({
     const [paymentHistoryError, setPaymentHistoryError] = useState<
         string | null
     >(null);
+    const [paymentHistorySearch, setPaymentHistorySearch] = useState("");
 
     useEffect(() => {
         if (!showViewModal || !selectedStudent) {
@@ -3987,9 +3988,10 @@ function StudentManagement({
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div>
                                 <button
-                                    onClick={() =>
-                                        setShowPaymentHistoryModal(false)
-                                    }
+                                    onClick={() => {
+                                        setShowPaymentHistoryModal(false);
+                                        setPaymentHistorySearch("");
+                                    }}
                                     className="flex items-center gap-1.5 text-base font-medium text-[#1a2b4a] hover:underline mb-2"
                                 >
                                     <ChevronDown className="w-5 h-5 rotate-90" />
@@ -4007,7 +4009,7 @@ function StudentManagement({
                                 </p>
                             </div>
                         </div>
-                        <div className="max-w-2xl mx-auto">
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                             {paymentHistoryError ? (
                                 <p className="text-sm text-red-500">
                                     {paymentHistoryError}
@@ -4019,7 +4021,21 @@ function StudentManagement({
                                 </p>
                             ) : (
                                 <>
-                                    <div className="mb-4 p-3 bg-white border border-gray-200 rounded-lg flex items-center justify-between text-sm">
+                                    <div className="mb-4 relative">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8b8476]" />
+                                        <input
+                                            type="text"
+                                            value={paymentHistorySearch}
+                                            onChange={(e) =>
+                                                setPaymentHistorySearch(
+                                                    e.target.value,
+                                                )
+                                            }
+                                            placeholder="Search by receipt number..."
+                                            className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1a4a4a]/20 text-black"
+                                        />
+                                    </div>
+                                    <div className="mb-4 p-3 bg-[#faf8f5] border border-gray-200 rounded-lg flex items-center justify-between text-sm">
                                         <span className="text-[#8b8476]">
                                             Total Paid
                                         </span>
@@ -4036,8 +4052,35 @@ function StudentManagement({
                                                 })}
                                         </span>
                                     </div>
+                                    {paymentHistory.filter((p) =>
+                                        p.receiptNumber
+                                            ?.toLowerCase()
+                                            .includes(
+                                                paymentHistorySearch
+                                                    .trim()
+                                                    .toLowerCase(),
+                                            ),
+                                    ).length === 0 &&
+                                    paymentHistorySearch.trim() ? (
+                                        <p className="text-sm text-[#8b8476] px-1">
+                                            No payments match receipt number "
+                                            {paymentHistorySearch}".
+                                        </p>
+                                    ) : (
                                     <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100 px-4">
-                                        {paymentHistory.map((p) => (
+                                        {paymentHistory
+                                            .filter((p) =>
+                                                paymentHistorySearch.trim()
+                                                    ? (p.receiptNumber || "")
+                                                          .toLowerCase()
+                                                          .includes(
+                                                              paymentHistorySearch
+                                                                  .trim()
+                                                                  .toLowerCase(),
+                                                          )
+                                                    : true,
+                                            )
+                                            .map((p) => (
                                             <div
                                                 key={p.id}
                                                 className="py-3 flex items-center justify-between gap-3 flex-wrap"
@@ -4071,6 +4114,7 @@ function StudentManagement({
                                             </div>
                                         ))}
                                     </div>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -4095,7 +4139,7 @@ function StudentManagement({
                             </h1>
                         </div>
                     </div>
-                    <div className="max-w-2xl mx-auto space-y-5">
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
                             <div className="flex items-start gap-5 pb-5 border-b border-gray-200">
                                 <div className="w-16 h-16 bg-gradient-to-br from-[#1a2b4a] to-[#2d4263] rounded-xl flex items-center justify-center text-white text-xl font-bold shrink-0">
                                     {selectedStudent.name
@@ -4322,12 +4366,7 @@ function StudentManagement({
                                 >
                                     Change Status
                                 </button>
-                                <button
-                                    onClick={() => setShowViewModal(false)}
-                                    className="px-4 py-2.5 border-2 border-gray-200 text-[#6b6456] rounded-lg font-medium hover:bg-[#faf8f5] transition-all text-sm"
-                                >
-                                    Back
-                                </button>
+                                
                             </div>
                         </div>
                     </div>
@@ -4796,7 +4835,7 @@ function StudentEditModal({
                     <UserCheck className="w-3.5 h-3.5" /> Change Status
                 </button>
             </div>
-            <div className="max-w-2xl mx-auto space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-[#6b6456] mb-1">
                             Student ID

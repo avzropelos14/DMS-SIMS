@@ -5,7 +5,7 @@ import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import {
   LayoutDashboard, PhilippinePeso, Users, Search, Filter,
-  Receipt, Calendar, User, XCircle, Plus,
+  Receipt, Calendar, User, Plus,
   Printer, ArrowLeft,
   CheckCircle, AlertCircle, Clock, CreditCard, Eye, Download
 } from 'lucide-react';
@@ -32,8 +32,8 @@ type ReceiptDetailsProps = {
   schoolInfo: SchoolSettings;
 };
 
-// Receipt content shared by the "View Receipt" overlay (Student Accounts' payment
-// history entries) and the Payment History "Print Receipt" dedicated page. Includes
+// Receipt content shared by the Student Accounts "View Receipt" page and the
+// Payment History "Print Receipt" page (both rendered via ReceiptPage). Includes
 // both the on-screen layout and the formal print-only official-receipt layout — the
 // latter shown only inside the @media print rule via print:block (see src/index.css).
 function ReceiptDetails({
@@ -206,30 +206,11 @@ function useSchoolInfo(): SchoolSettings {
   return schoolInfo;
 }
 
-// Payment receipt overlay — used by Student Accounts' "View Receipt" button on a
-// payment history entry. Its container carries .print-receipt so the Print button's
-// window.print() call actually prints only the receipt (see the @media print rule
-// in src/index.css).
-function ReceiptModal(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onClose: () => void }) {
-  const schoolInfo = useSchoolInfo();
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-lg p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-none print-receipt">
-        <div className="flex items-center justify-between mb-6 print:hidden">
-          <h2 className="text-xl font-bold text-[#1a2b4a]">Payment Receipt</h2>
-          <button onClick={props.onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-all">
-            <XCircle className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
-        <ReceiptDetails {...props} schoolInfo={schoolInfo} />
-      </div>
-    </div>
-  );
-}
-
 // Payment receipt — dedicated page (replaces the old "Print Receipt" modal on
-// Payment History). Same .print-receipt behavior as ReceiptModal.
-function ReceiptPage(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onBack: () => void }) {
+// Payment History, and the old "View Receipt" modal on Student Accounts). Its
+// container carries .print-receipt so the Print button's window.print() call
+// actually prints only the receipt (see the @media print rule in src/index.css).
+function ReceiptPage(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onBack: () => void; backLabel?: string }) {
   const schoolInfo = useSchoolInfo();
   return (
     <div className="space-y-6">
@@ -238,11 +219,11 @@ function ReceiptPage(props: Omit<ReceiptDetailsProps, 'schoolInfo'> & { onBack: 
         className="flex items-center gap-2 text-[#1a2b4a] hover:text-[#2d4263] font-medium print:hidden"
       >
         <ArrowLeft className="w-5 h-5" />
-        <span>Back to Payment History</span>
+        <span>{props.backLabel || 'Back to Payment History'}</span>
       </button>
       <div className="print:hidden">
         <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Payment Receipt</h1>
-        <p className="text-[#6b6456]">{props.studentName}</p>
+        {/* <p className="text-[#6b6456]">{props.studentName}</p> */}
       </div>
       <div className="max-w-2xl mx-auto w-full">
         <div className="bg-white rounded-xl shadow-lg p-8 print-receipt">
@@ -1204,6 +1185,24 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
     return matchesSearch && matchesFilter;
   });
 
+  // Payment receipt — dedicated page (replaces the old "View Receipt" modal).
+  if (receiptPayment && viewDetailsStudent) {
+    return (
+      <ReceiptPage
+        studentName={viewDetailsStudent?.name}
+        studentId={viewDetailsStudent?.id}
+        grade={viewDetailsStudent?.grade}
+        reference={receiptPayment.reference}
+        amount={receiptPayment.amount}
+        method={receiptPayment.method}
+        dateLabel={receiptPayment.date}
+        schoolYear={schoolYear}
+        backLabel="Back to Student Details"
+        onBack={() => setReceiptPayment(null)}
+      />
+    );
+  }
+
   // Student Details — dedicated page (replaces the old "View Details" modal).
   if (viewDetailsStudent) {
     return (
@@ -1217,7 +1216,7 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
         </button>
         <div>
           <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student Details</h1>
-          <p className="text-[#6b6456]">{viewDetailsStudent.name}</p>
+          
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-8">
@@ -1313,20 +1312,6 @@ function StudentAccounts({ schoolYear, tuitionFees = DEFAULT_TUITION_FEES }: { s
             </div>
           </div>
         </div>
-
-        {receiptPayment && (
-          <ReceiptModal
-            studentName={viewDetailsStudent?.name}
-            studentId={viewDetailsStudent?.id}
-            grade={viewDetailsStudent?.grade}
-            reference={receiptPayment.reference}
-            amount={receiptPayment.amount}
-            method={receiptPayment.method}
-            dateLabel={receiptPayment.date}
-            schoolYear={schoolYear}
-            onClose={() => setReceiptPayment(null)}
-          />
-        )}
       </div>
     );
   }
