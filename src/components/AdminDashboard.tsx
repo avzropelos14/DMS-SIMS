@@ -13229,21 +13229,27 @@ function AcademicsSection({
     if (showCreateModal) {
         return (
                 <div className="space-y-6">
+                    <button
+                        onClick={() => setShowCreateModal(false)}
+                        className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                    >
+                        <ArrowLeft className="w-5 h-5" />
+                        <span>Back to Schedules</span>
+                    </button>
                     <div>
-                        <button
-                            onClick={() => setShowCreateModal(false)}
-                            className="flex items-center gap-1.5 text-sm font-medium text-[#1a2b4a] hover:underline mb-2"
-                        >
-                            <ChevronDown className="w-4 h-4 rotate-90" />
-                            Back to Schedules
-                        </button>
                         <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
                             {editingTeacherName
                                 ? "Edit Schedule"
                                 : "Create Schedule"}
                         </h1>
+                        <p className="text-[#6b6456]">
+                            {editingTeacherName
+                                ? `Update ${editingTeacherName}'s subjects, classes, rooms, and time slots.`
+                                : "Assign a teacher to subjects, classes, rooms, and time slots."}{" "}
+                            • {schoolYear}
+                        </p>
                     </div>
-                    <div className="max-w-lg mx-auto">
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 w-full">
                         <div className="p-6 space-y-5">
                             <div className="relative">
                                 <label className="block text-sm font-medium text-[#6b6456] mb-1">
@@ -13510,6 +13516,34 @@ function AcademicsSection({
                                     </div>
                                 ))}
                             </div>
+                            {/* Schedule Conflict Notice — blocks saving until the conflicting slot is fixed */}
+                            {scheduleConflicts && scheduleConflicts.length > 0 && (
+                                <div className="p-4 bg-red-50 border border-red-200 rounded-lg space-y-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
+                                            <AlertCircle className="w-4 h-4 shrink-0" />
+                                            Schedule Conflict
+                                        </div>
+                                        <button
+                                            onClick={() => setScheduleConflicts(null)}
+                                            className="p-1 text-red-400 hover:text-red-600 rounded"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <ul className="space-y-1 list-disc pl-6">
+                                        {scheduleConflicts.map((c, i) => (
+                                            <li key={i} className="text-sm text-red-700">
+                                                {c}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <p className="text-xs text-[#8b8476]">
+                                        Adjust the day, time, room, or class before
+                                        saving this schedule.
+                                    </p>
+                                </div>
+                            )}
                             {saveError && (
                                 <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
                                     <AlertCircle className="w-4 h-4 shrink-0" />{" "}
@@ -13839,44 +13873,6 @@ function AcademicsSection({
           )}
         </div>
       </div> */}
-
-            {/* Schedule Conflict Notice — blocks saving until the conflicting slot is fixed */}
-            {scheduleConflicts && scheduleConflicts.length > 0 && (
-                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4">
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
-                        <div className="p-6 space-y-4">
-                            <div className="flex items-center gap-3">
-                                <div className="w-11 h-11 bg-red-100 rounded-full flex items-center justify-center shrink-0">
-                                    <AlertCircle className="w-6 h-6 text-red-500" />
-                                </div>
-                                <h3 className="text-lg font-bold text-[#1a2b4a]">
-                                    Schedule Conflict
-                                </h3>
-                            </div>
-                            <ul className="space-y-2">
-                                {scheduleConflicts.map((c, i) => (
-                                    <li
-                                        key={i}
-                                        className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3"
-                                    >
-                                        {c}
-                                    </li>
-                                ))}
-                            </ul>
-                            <p className="text-xs text-[#8b8476]">
-                                Adjust the day, time, room, or class before
-                                saving this schedule.
-                            </p>
-                            <button
-                                onClick={() => setScheduleConflicts(null)}
-                                className="w-full px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all"
-                            >
-                                Got it
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* Create Event Modal */}
             {showEventModal && (
@@ -16938,6 +16934,10 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
     type TORStudent = {
         id: string;
         name: string;
+        firstName: string;
+        middleName: string;
+        lastName: string;
+        suffix: string;
         birthdate: string;
         address: string;
         guardianName: string;
@@ -17027,7 +17027,7 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
             const { data, error } = await supabase
                 .from("students")
                 .select(
-                    "id, first_name, middle_name, last_name, date_of_birth, home_address, guardian_name, grade_level, section",
+                    "id, first_name, middle_name, last_name, suffix, date_of_birth, home_address, guardian_name, grade_level, section",
                 )
                 .order("last_name");
             if (cancelled) return;
@@ -17041,6 +17041,10 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                         name: [s.first_name, s.middle_name, s.last_name]
                             .filter(Boolean)
                             .join(" "),
+                        firstName: s.first_name ?? "",
+                        middleName: s.middle_name ?? "",
+                        lastName: s.last_name ?? "",
+                        suffix: s.suffix ?? "",
                         birthdate: s.date_of_birth ?? "",
                         address: s.home_address ?? "",
                         guardianName: s.guardian_name ?? "",
@@ -17180,23 +17184,153 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
         setShowEditModal(false);
     };
 
+    // Edit Student Info page (grades are never editable here)
+    if (selected && showEditModal) {
+        return (
+            <div className="space-y-6">
+                <button
+                    onClick={() => setShowEditModal(false)}
+                    className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                >
+                    <ArrowLeft className="w-5 h-5" />
+                    <span>Back to Transcript of Records</span>
+                </button>
+                <div>
+                    <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
+                        Edit Student Info
+                    </h1>
+                    <p className="text-[#6b6456]">
+                        Update the personal details printed on{" "}
+                        {selected.name}'s Transcript of Records.
+                    </p>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-4 w-full">
+                    {/* Row 1: name breakdown (read only) */}
+                    <div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            {[
+                                { label: "Last Name", value: selected.lastName },
+                                { label: "First Name", value: selected.firstName },
+                                {
+                                    label: "Middle Initial",
+                                    value: selected.middleName
+                                        ? `${selected.middleName.trim().charAt(0).toUpperCase()}.`
+                                        : "",
+                                },
+                                { label: "Suffix", value: selected.suffix },
+                            ].map((field) => (
+                                <div key={field.label}>
+                                    <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                                        {field.label}
+                                    </label>
+                                    <input
+                                        value={field.value || "—"}
+                                        disabled
+                                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-[#8b8476]"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-xs text-[#8b8476] mt-1">
+                            Edit the student's name from Student Management.
+                        </p>
+                    </div>
+                    {/* Row 2: birthdate and address */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            Birthdate
+                        </label>
+                        <input
+                            type="date"
+                            value={editForm.birthdate}
+                            onChange={(e) =>
+                                setEditForm((f) => ({
+                                    ...f,
+                                    birthdate: e.target.value,
+                                }))
+                            }
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 text-black"
+                        />
+                    </div>
+                    <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            Address
+                        </label>
+                        <input
+                            value={editForm.address}
+                            onChange={(e) =>
+                                setEditForm((f) => ({
+                                    ...f,
+                                    address: e.target.value,
+                                }))
+                            }
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 text-black"
+                        />
+                    </div>
+                    </div>
+                    {/* Row 3: guardian name */}
+                    <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
+                            Guardian Name
+                        </label>
+                        <input
+                            value={editForm.guardianName}
+                            onChange={(e) =>
+                                setEditForm((f) => ({
+                                    ...f,
+                                    guardianName: e.target.value,
+                                }))
+                            }
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20 text-black"
+                        />
+                    </div>
+                    <p className="text-xs text-[#8b8476] italic">
+                        Subject grades cannot be modified from here.
+                    </p>
+                    <div className="flex gap-3 pt-2 border-t border-gray-200">
+                        <button
+                            onClick={() => setShowEditModal(false)}
+                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={saveEdit}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all"
+                        >
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     if (selected) {
         return (
                 <div className="space-y-6">
+                    <button
+                        onClick={() => {
+                            setShowEditModal(false);
+                            setSelected(null);
+                        }}
+                        className="flex items-center gap-2 text-[#7d1935] hover:text-[#9b2847] font-medium"
+                    >
+                        <ArrowLeft className="w-5 h-5" />
+                        <span>Back to Grade Records</span>
+                    </button>
                     <div>
-                        <button
-                            onClick={() => setSelected(null)}
-                            className="flex items-center gap-1.5 text-sm font-medium text-[#1a2b4a] hover:underline mb-2"
-                        >
-                            <ChevronDown className="w-4 h-4 rotate-90" />
-                            Back to Grade Records
-                        </button>
                         <h1 className="text-3xl font-bold text-[#1a2b4a] mb-1">
                             Transcript of Records
                         </h1>
+                        <p className="text-[#6b6456]">
+                            Preview the student's grade history before printing
+                            or downloading the TOR.
+                        </p>
                     </div>
 
-                    <div className="max-w-2xl mx-auto space-y-5">
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-5">
                             <div className="grid grid-cols-2 gap-4 pb-4 border-b border-gray-200">
                                 <div>
                                     <p className="text-xs text-[#8b8476]">
@@ -17417,107 +17551,6 @@ function GradeRecordsSection({ schoolYear }: { schoolYear: string }) {
                                 </button>
                             </div>
                     </div>
-
-                    {/* Edit Student Info Modal (grades are never editable here) */}
-                    {showEditModal && selected && (
-                        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-                            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-                                <div className="bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white px-6 py-4 rounded-t-2xl flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <Edit className="w-5 h-5" />
-                                        <h3 className="text-lg font-semibold">
-                                            Edit Student Info
-                                        </h3>
-                                    </div>
-                                    <button
-                                        onClick={() => setShowEditModal(false)}
-                                        className="p-1 hover:bg-white/20 rounded-lg"
-                                    >
-                                        <X className="w-5 h-5" />
-                                    </button>
-                                </div>
-                                <div className="p-6 space-y-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                            Full Name
-                                        </label>
-                                        <input
-                                            value={selected.name}
-                                            disabled
-                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-[#8b8476]"
-                                        />
-                                        <p className="text-xs text-[#8b8476] mt-1">
-                                            Edit the student's name from Student
-                                            Management.
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                            Birthdate
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={editForm.birthdate}
-                                            onChange={(e) =>
-                                                setEditForm((f) => ({
-                                                    ...f,
-                                                    birthdate: e.target.value,
-                                                }))
-                                            }
-                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                            Address
-                                        </label>
-                                        <input
-                                            value={editForm.address}
-                                            onChange={(e) =>
-                                                setEditForm((f) => ({
-                                                    ...f,
-                                                    address: e.target.value,
-                                                }))
-                                            }
-                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-[#6b6456] mb-1">
-                                            Guardian Name
-                                        </label>
-                                        <input
-                                            value={editForm.guardianName}
-                                            onChange={(e) =>
-                                                setEditForm((f) => ({
-                                                    ...f,
-                                                    guardianName: e.target.value,
-                                                }))
-                                            }
-                                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#c9a961]/20"
-                                        />
-                                    </div>
-                                    <p className="text-xs text-[#8b8476] italic">
-                                        Subject grades cannot be modified from here.
-                                    </p>
-                                    <div className="flex gap-3 pt-2 border-t border-gray-200">
-                                        <button
-                                            onClick={() => setShowEditModal(false)}
-                                            className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all"
-                                        >
-                                            Cancel
-                                        </button>
-                                        <button
-                                            onClick={saveEdit}
-                                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#c9a961] to-[#d4af37] text-white rounded-lg font-medium hover:shadow-lg transition-all"
-                                        >
-                                            Save Changes
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
                 </div>
         );
     }
