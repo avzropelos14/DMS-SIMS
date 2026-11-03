@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { DashboardLayout } from './DashboardLayout';
+import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { StaffProfileView } from './StaffProfileView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
@@ -369,7 +370,15 @@ interface CashierPortalProps {
 }
 
 export function CashierPortal({ user, onLogout, tuitionFees: tuitionFeesProp = DEFAULT_TUITION_FEES, enrollmentFees: enrollmentFeesProp = DEFAULT_ENROLLMENT_FEES }: CashierPortalProps) {
-  const [activeView, setActiveView] = useState('overview');
+  const navigation = [
+    { id: 'overview', label: 'Payment Overview', icon: LayoutDashboard },
+    { id: 'process', label: 'Process Payment', icon: PesoSignIcon },
+    { id: 'students', label: 'Student Accounts', icon: Users },
+    { id: 'history', label: 'Payment History', icon: Receipt },
+    { id: 'profile', label: 'My Profile', icon: User }
+  ];
+
+  const [activeView, setActiveView] = usePersistedView('cashier', user?.id, navViewIds(navigation), 'overview');
   const [schoolYear, setSchoolYear] = useState('2025-2026');
   // The cashier's session can outlive an admin changing fees in a different session, and
   // the tuitionFees/enrollmentFees props are only ever set once at login — so refetch them
@@ -397,14 +406,6 @@ export function CashierPortal({ user, onLogout, tuitionFees: tuitionFeesProp = D
   useEffect(() => {
     loadFees();
   }, [activeView]);
-
-  const navigation = [
-    { id: 'overview', label: 'Payment Overview', icon: LayoutDashboard },
-    { id: 'process', label: 'Process Payment', icon: PesoSignIcon },
-    { id: 'students', label: 'Student Accounts', icon: Users },
-    { id: 'history', label: 'Payment History', icon: Receipt },
-    { id: 'profile', label: 'My Profile', icon: User }
-  ];
 
   return (
     <DashboardLayout

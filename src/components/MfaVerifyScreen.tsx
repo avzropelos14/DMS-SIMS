@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowRight, AlertCircle, ShieldCheck } from "lucide-react";
 import schoolLogo from "./assets/dmgteLogo.jpg";
-import { verifyMfaCode, sendMfaCode } from "../lib/mfa";
+import { verifyMfaCode, sendMfaCode, type SendMfaCodeResult } from "../lib/mfa";
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from "../lib/schoolSettings";
 
 interface MfaVerifyScreenProps {
@@ -36,8 +36,38 @@ export function MfaVerifyScreen({
     const [isVerifying, setIsVerifying] = useState(false);
     const [isResending, setIsResending] = useState(false);
     const [resendMessage, setResendMessage] = useState("");
+    const [resendCooldown, setResendCooldown] = useState(0);
     const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_SETTINGS.school_name);
     const [schoolMotto, setSchoolMotto] = useState(DEFAULT_SCHOOL_SETTINGS.school_motto);
+    // Guards the on-open request against React StrictMode's double effect run in dev.
+    const initialRequestMade = useRef(false);
+
+    const applySendResult = (result: SendMfaCodeResult, resent: boolean) => {
+        if (result.resendAvailableInSeconds !== undefined) {
+            setResendCooldown(result.resendAvailableInSeconds);
+        }
+        if (result.error) {
+            setMfaError(result.error);
+        } else if (result.alreadySent) {
+            setResendMessage("A code was already sent and is still valid. Check your inbox (and spam folder).");
+        } else if (result.sent) {
+            setResendMessage(resent ? "A new code has been sent to your email." : "");
+        }
+    };
+
+    // The code is requested here, on the MFA screen, rather than at login or on page
+    // refresh. A still-valid code is reused instead of sending another email.
+    useEffect(() => {
+        if (initialRequestMade.current) return;
+        initialRequestMade.current = true;
+        sendMfaCode(userId).then((result) => applySendResult(result, false));
+    }, [userId]);
+
+    useEffect(() => {
+        if (resendCooldown <= 0) return;
+        const timer = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+        return () => clearTimeout(timer);
+    }, [resendCooldown]);
 
     useEffect(() => {
         let cancelled = false;
@@ -73,12 +103,8 @@ export function MfaVerifyScreen({
         setResendMessage("");
         setIsResending(true);
         try {
-            const result = await sendMfaCode(userId);
-            if (result.error) {
-                setMfaError(result.error);
-            } else {
-                setResendMessage("A new code has been sent to your email.");
-            }
+            const result = await sendMfaCode(userId, { resend: true });
+            applySendResult(result, true);
         } finally {
             setIsResending(false);
         }
@@ -256,10 +282,14 @@ export function MfaVerifyScreen({
                                 <button
                                     type="button"
                                     onClick={handleResendCode}
-                                    disabled={isResending}
-                                    className="text-[#1a2b4a] font-semibold hover:opacity-70 transition-opacity disabled:opacity-50"
+                                    disabled={isResending || resendCooldown > 0}
+                                    className="text-[#1a2b4a] font-semibold hover:opacity-70 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                    {isResending ? "Sending..." : "Resend code"}
+                                    {isResending
+                                        ? "Sending..."
+                                        : resendCooldown > 0
+                                          ? `Resend code (${resendCooldown}s)`
+                                          : "Resend code"}
                                 </button>
                             </div>
                         </form>

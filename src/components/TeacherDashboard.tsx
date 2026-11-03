@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { StaffProfileView } from './StaffProfileView';
+import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import {
@@ -17,19 +18,19 @@ interface TeacherDashboardProps {
 }
 
 export function TeacherDashboard({ user, onLogout }: TeacherDashboardProps) {
-  const [activeView, setActiveView] = useState('overview');
-  const [schoolYear, setSchoolYear] = useState('2025-2026');
-
-  useEffect(() => {
-    getCurrentSchoolYear().then((sy) => { if (sy) setSchoolYear(sy.label); });
-  }, []);
-
   const navigation = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'classes', label: 'My Classes', icon: Users },
     { id: 'schedule', label: 'Class Schedule', icon: Calendar },
     { id: 'profile', label: 'My Profile', icon: User }
   ];
+
+  const [activeView, setActiveView] = usePersistedView('teacher', user?.id, navViewIds(navigation), 'overview');
+  const [schoolYear, setSchoolYear] = useState('2025-2026');
+
+  useEffect(() => {
+    getCurrentSchoolYear().then((sy) => { if (sy) setSchoolYear(sy.label); });
+  }, []);
 
   return (
     <DashboardLayout

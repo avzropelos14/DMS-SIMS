@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
+import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import { fetchAssignedTeacherMap } from '../lib/schedule';
@@ -27,8 +28,21 @@ interface ParentPortalProps {
   onLogout: () => void;
 }
 
+const PARENT_NAVIGATION = [
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'academics', label: 'Academic Progress', icon: Award },
+  { id: 'schedule', label: 'Student Schedule', icon: Calendar },
+  { id: 'pickup', label: 'Student Pickup', icon: QrCode },
+  { id: 'financials', label: 'Billing & Payments', icon: Settings },
+  { id: 'profile', label: 'My Profile', icon: User },
+  /* { id: 'messages', label: 'Messages', icon: MessageSquare } */
+];
+// The School Policy page is opened from the dashboard rather than the sidebar.
+const PARENT_VIEW_IDS = [...navViewIds(PARENT_NAVIGATION), 'schoolPolicy'];
+
 export function ParentPortal({ user, onLogout }: ParentPortalProps) {
-  const [activeView, setActiveView] = useState('overview');
+  // Kept above the enrollmentConfirmed early return below (rules of hooks).
+  const [activeView, setActiveView] = usePersistedView('parent', user?.id, PARENT_VIEW_IDS, 'overview');
   const [schoolYear, setSchoolYear] = useState('2025-2026');
   const [selectedChild, setSelectedChild] = useState('');
 
@@ -164,15 +178,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
     );
   }
 
-  const navigation = [
-    { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'academics', label: 'Academic Progress', icon: Award },
-    { id: 'schedule', label: 'Student Schedule', icon: Calendar },
-    { id: 'pickup', label: 'Student Pickup', icon: QrCode },
-    { id: 'financials', label: 'Billing & Payments', icon: Settings },
-    { id: 'profile', label: 'My Profile', icon: User },
-    /* { id: 'messages', label: 'Messages', icon: MessageSquare } */
-  ];
+  const navigation = PARENT_NAVIGATION;
 
   return (
     <>

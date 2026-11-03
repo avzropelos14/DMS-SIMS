@@ -3,6 +3,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { SetPasswordScreen } from './components/SetPasswordScreen';
 import { MfaVerifyScreen } from './components/MfaVerifyScreen';
 import { AdminDashboard } from './components/AdminDashboard';
+import { RegistrarDashboard } from './components/RegistrarDashboard';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { StudentPortal } from './components/StudentPortal';
 import { ParentPortal } from './components/ParentPortal';
@@ -10,7 +11,8 @@ import { GuardPortal } from './components/GuardPortal';
 import { CashierPortal } from './components/CashierPortal';
 import { supabase } from './supabase';
 import { resolveIdentity } from './lib/resolveRole';
-import { sendMfaCode } from './lib/mfa';
+import { checkTrustedDevice } from './lib/mfa';
+import { clearPersistedViews } from './lib/usePersistedView';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES } from './lib/tuition';
 import type { User } from '@supabase/supabase-js';
 
@@ -61,7 +63,8 @@ function App() {
       if (identity) {
         // A persisted auth session alone doesn't prove this device passed MFA —
         // re-check trust so a page refresh can't be used to skip the code step.
-        const mfaResult = await sendMfaCode(user.id);
+        // checkOnly: a refresh never emails a code; the MFA screen requests one.
+        const mfaResult = await checkTrustedDevice(user.id);
         if (cancelled) return;
         if (mfaResult.trusted) {
           setCurrentRole(identity.role);
@@ -80,6 +83,7 @@ function App() {
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') {
+        clearPersistedViews();
         setCurrentRole(null);
         setCurrentUser(null);
         setNeedsPasswordSetup(false);
@@ -150,6 +154,7 @@ function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    clearPersistedViews();
     setCurrentRole(null);
     setCurrentUser(null);
     setNeedsPasswordSetup(false);
@@ -218,10 +223,10 @@ function App() {
   return (
     <div className="min-h-screen bg-[#f5f3f0]">
       {currentRole === 'admin' && (
-        <AdminDashboard user={currentUser} onLogout={handleLogout} accessLevel="full" tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
+        <AdminDashboard user={currentUser} onLogout={handleLogout} tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
       )}
       {currentRole === 'registrar' && (
-        <AdminDashboard user={currentUser} onLogout={handleLogout} accessLevel="registrar" tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
+        <RegistrarDashboard user={currentUser} onLogout={handleLogout} tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
       )}
       {currentRole === 'teacher' && (
         <TeacherDashboard user={currentUser} onLogout={handleLogout} />

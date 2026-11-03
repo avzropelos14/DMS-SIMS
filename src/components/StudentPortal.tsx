@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { DashboardLayout } from './DashboardLayout';
+import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import { fetchAssignedTeacherMap } from '../lib/schedule';
@@ -44,8 +45,15 @@ function initialsFor(name: string | null | undefined) {
 // ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
+const STUDENT_NAVIGATION = [
+  { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'grades', label: 'Grades & Progress', icon: Award },
+  { id: 'schedule', label: 'Class Schedule', icon: Calendar },
+  { id: 'profile', label: 'My Profile', icon: User }
+];
+
 export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogout?: () => void }) {
-  const [activeView, setActiveView] = useState('overview');
+  const [activeView, setActiveView] = usePersistedView('student', user?.id, navViewIds(STUDENT_NAVIGATION), 'overview');
   const [schoolYear, setSchoolYear] = useState('2025-2026');
   const [subjectGrades, setSubjectGrades] = useState<SubjectGrade[]>([]);
 
@@ -174,12 +182,7 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
     );
   }
 
-  const navigation = [
-    { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'grades', label: 'Grades & Progress', icon: Award },
-    { id: 'schedule', label: 'Class Schedule', icon: Calendar },
-    { id: 'profile', label: 'My Profile', icon: User }
-  ];
+  const navigation = STUDENT_NAVIGATION;
 
   return (
     <DashboardLayout

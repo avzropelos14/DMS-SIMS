@@ -1,9 +1,10 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import {
   LogOut, Settings, Menu, X, ChevronDown,
-  HelpCircle, MessageSquare, Calendar
+  HelpCircle, MessageSquare, Calendar, KeyRound
 } from 'lucide-react';
 import schoolLogo from './assets/dmgteLogo.jpg';
+import { ChangePasswordModal } from './shared/ChangePasswordModal';
 import { listAllSchoolYears } from '../lib/schoolYear';
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
 
@@ -57,6 +58,7 @@ export function DashboardLayout({
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [showYearSelector, setShowYearSelector] = useState(false);
   const [allSchoolYears, setAllSchoolYears] = useState<{ label: string; isCurrent: boolean }[]>([]);
   const [schoolName, setSchoolName] = useState(DEFAULT_SCHOOL_SETTINGS.school_name);
@@ -264,6 +266,21 @@ export function DashboardLayout({
                       </div>
                     </div>
                     <div className="p-2 border-t border-gray-200">
+                      {/* The full admin resets passwords from System Settings instead. */}
+                      {role !== 'admin' && (
+                        <button
+                          onClick={() => {
+                            setShowProfile(false);
+                            setShowChangePassword(true);
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[#faf8f5] rounded-lg transition-colors text-left group"
+                        >
+                          <KeyRound className="w-4 h-4 text-[#8b8476] group-hover:text-[#1a2b4a]" />
+                          <span className="text-sm text-[#2c2c2c] group-hover:text-[#1a2b4a] font-semibold">
+                            Change Password
+                          </span>
+                        </button>
+                      )}
                       <button
                         onClick={onLogout}
                         className="w-full flex items-center gap-3 px-3 py-2 hover:bg-red-50 rounded-lg transition-colors text-left group"
@@ -405,6 +422,8 @@ export function DashboardLayout({
           onClick={() => setSidebarOpen(false)}
         ></div>
       )}
+
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
     </div>
   );
 }

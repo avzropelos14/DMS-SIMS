@@ -5,7 +5,7 @@ import schoolLogo from "./assets/dmgteLogo.jpg";
 import { supabase } from './../supabase';
 import { resolveIdentity } from '../lib/resolveRole';
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
-import { sendMfaCode } from '../lib/mfa';
+import { checkTrustedDevice } from '../lib/mfa';
 import { MfaVerifyScreen } from './MfaVerifyScreen';
 import type { User } from '@supabase/supabase-js';
 
@@ -63,7 +63,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 return;
             }
 
-            const mfaResult = await sendMfaCode(data.user.id);
+            // Only checks for a remembered device; the code itself is sent by the MFA screen.
+            const mfaResult = await checkTrustedDevice(data.user.id);
             if (mfaResult.error) {
                 await supabase.auth.signOut();
                 setError(mfaResult.error);

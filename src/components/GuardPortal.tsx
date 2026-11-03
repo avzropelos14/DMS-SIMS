@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabase';
+import { usePersistedView } from '../lib/usePersistedView';
 import BarcodeScanner from 'react-qr-barcode-scanner';
 import {
   QrCode, History, Shield, CheckCircle, XCircle, Clock,
-  User, Search, ArrowLeft, AlertCircle, Scan
+  User, Search, ArrowLeft, AlertCircle, Scan, KeyRound
 } from 'lucide-react';
+import { ChangePasswordModal } from './shared/ChangePasswordModal';
 
 // Matches the QR payload the Parent portal encodes (see ParentPortal.tsx PickupQRPayload) —
 // the guardian name, guardian relationship, and student name, plus the IDs needed to verify
@@ -43,8 +45,13 @@ interface PickupRecord {
 }
 
 export function GuardPortal({ user, onLogout }: GuardPortalProps) {
-  const [activeView, setActiveView] = useState<'home' | 'scan' | 'history'>('home');
+  // Restoring 'scan' only shows the scan page: the camera starts when the guard presses
+  // Start Scanning (`scanning` is never persisted), so a refresh can't turn it on.
+  const [activeView, setActiveView] = usePersistedView<'home' | 'scan' | 'history'>(
+    'guard', user?.id, ['home', 'scan', 'history'], 'home',
+  );
   const [scanning, setScanning] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [validating, setValidating] = useState(false);
   const [scanResult, setScanResult] = useState<PickupRecord | null>(null);
   const [pickupHistory, setPickupHistory] = useState<PickupRecord[]>([]);
@@ -279,12 +286,23 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                   <div className="font-bold text-lg">{user.name}</div>
                 </div>
               </div>
-              <button
-                onClick={onLogout}
-                className="px-4 py-2 bg-white/10 backdrop-blur-lg rounded-xl text-xs font-medium hover:bg-white/20 transition-all"
-              >
-                Logout
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowChangePassword(true)}
+                  aria-label="Change Password"
+                  title="Change Password"
+                  className="px-3 py-2 bg-white/10 backdrop-blur-lg rounded-xl text-xs font-medium hover:bg-white/20 transition-all flex items-center gap-1.5"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Password</span>
+                </button>
+                <button
+                  onClick={onLogout}
+                  className="px-4 py-2 bg-white/10 backdrop-blur-lg rounded-xl text-xs font-medium hover:bg-white/20 transition-all"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
 
             {/* Time Display */}
@@ -723,6 +741,8 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
           100% { top: 0; }
         }
       `}</style>
+
+      {showChangePassword && <ChangePasswordModal onClose={() => setShowChangePassword(false)} />}
     </div>
   );
 }

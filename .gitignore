@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local planning notes (lists security issues; repo is public)
+Todos.md

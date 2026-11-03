@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Lock, ArrowRight, AlertCircle, LogOut } from "lucide-react";
 import schoolLogo from "./assets/dmgteLogo.jpg";
 import { supabase } from "../supabase";
+import { checkPasswordPolicy, MIN_PASSWORD_LENGTH } from "../lib/passwordPolicy";
 
 interface SetPasswordScreenProps {
     mode: "first-login" | "recovery";
@@ -19,10 +20,6 @@ export function SetPasswordScreen({ mode, onDone, onSignOut }: SetPasswordScreen
         e.preventDefault();
         setError("");
 
-        if (password.length < 8) {
-            setError("Password must be at least 8 characters long.");
-            return;
-        }
         if (password !== confirmPassword) {
             setError("Passwords do not match.");
             return;
@@ -30,6 +27,17 @@ export function SetPasswordScreen({ mode, onDone, onSignOut }: SetPasswordScreen
 
         setIsSubmitting(true);
         try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const user = sessionData.session?.user;
+            const policyError = await checkPasswordPolicy(password, {
+                email: user?.email,
+                names: [user?.user_metadata?.full_name],
+            });
+            if (policyError) {
+                setError(policyError);
+                return;
+            }
+
             const { error: updateError } = await supabase.auth.updateUser({
                 password,
                 data: { password_set: true },
@@ -77,7 +85,7 @@ export function SetPasswordScreen({ mode, onDone, onSignOut }: SetPasswordScreen
                                 type="password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                placeholder="At least 8 characters"
+                                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
                                 required
                                 className="w-full pl-11 pr-4 py-3.5 text-sm rounded-xl border-2 border-[#5c5c5b] focus:border-[#1a2b4a] focus:ring-2 focus:ring-[#1a2b4a]/10 outline-none transition-all bg-white"
                             />
