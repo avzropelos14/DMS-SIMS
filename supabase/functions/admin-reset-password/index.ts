@@ -1,17 +1,27 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
+// Admin-initiated password reset, by email only. The caller never sees a password or code:
+// the account holder receives ONE email with
+//   - a password reset link (Supabase recovery link, valid for the project's link lifetime), and
+//   - a one-time sign-in recovery code (24 hours) to get past the verification step after
+//     clicking the link without waiting for a second email.
+// The account is signed out everywhere and its remembered devices are forgotten once the
+// email has been sent. If the admin portal is ever compromised, all an attacker can do here
+// is send these emails to the real owners.
 // Who may reset whom:
 //   registrar  -> parent and student accounts only
 //   full_admin -> any account except a full_admin
-//   nobody     -> a full_admin account (they use Change Password / the dashboard instead)
-// The caller never chooses the password: a random temporary one is generated, returned once,
-// and the owner must set their own on next sign-in (password_set=false).
+//   nobody     -> a full_admin account (they use the Supabase dashboard / SQL Editor instead)
+// Body: { email }. Returns { success, sent_to } where sent_to is masked (j•••@gmail.com).
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
 const FROM_ADDRESS = "Dumaguete Mission SIMS <dumaguetemissionschool@dmsis.app>";
 // Generated logins (jdelacruz.student@missionschool.edu.ph) have no real inbox.
 const SYNTHETIC_EMAIL_DOMAIN = "@missionschool.edu.ph";
+// Where the reset link lands. The request's Origin is used when it is one of ours.
+const DEFAULT_REDIRECT = "https://www.dmsis.app";
+const ALLOWED_REDIRECTS = ["https://www.dmsis.app", "https://dmsis.app", "http://localhost:5173"];
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -39,20 +49,27 @@ function sessionIdFrom(authHeader: string): string | null {
   }
 }
 
-// 14 characters from an alphabet without look-alikes (0/O, 1/l/I), with rejection
-// sampling so every character is equally likely.
-function generateTemporaryPassword(length = 14): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
-  const limit = 256 - (256 % chars.length);
-  const out: string[] = [];
-  while (out.length < length) {
-    const bytes = new Uint8Array(length * 2);
-    crypto.getRandomValues(bytes);
-    for (const b of bytes) {
-      if (b < limit && out.length < length) out.push(chars[b % chars.length]);
-    }
-  }
-  return out.join("");
+async function sha256Hex(input: string): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// 10 characters from a 32-character alphabet without look-alikes (256 % 32 = 0: no bias).
+function generateRecoveryCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => chars[b % 32]).join("");
+}
+
+// j•••@gmail.com — enough for the admin to confirm the right account, nothing more.
+function maskEmail(email: string): string {
+  const [local, domain] = email.split("@");
+  return `${local.slice(0, 1)}•••@${domain ?? ""}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 type TargetKind = "full_admin" | "registrar" | "cashier" | "teacher" | "guard" | "parent" | "student" | "unlinked";
@@ -78,34 +95,6 @@ function mayReset(callerRole: string, target: TargetKind): boolean {
   return false;
 }
 
-async function sendResetNotice(admin: SupabaseClient, to: string): Promise<boolean> {
-  if (!RESEND_API_KEY || to.toLowerCase().endsWith(SYNTHETIC_EMAIL_DOMAIN)) return false;
-  // Security notices have their own daily budget (20) so they can never eat the MFA codes' share.
-  const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "security" });
-  if (budgetError) console.error("Email budget check failed", budgetError);
-  if (withinBudget !== true) return false;
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: FROM_ADDRESS,
-        to,
-        subject: "Your SIMS password was reset",
-        html:
-          "<p>The school office has reset the password for your SIMS account and signed it out on all devices.</p>" +
-          "<p>You will receive a temporary password from the office and will be asked to choose a new password when you sign in.</p>" +
-          "<p>If you did not request this, please contact the school office right away.</p>",
-      }),
-    });
-    if (!res.ok) console.error("Reset notice failed", res.status, await res.text());
-    return res.ok;
-  } catch (err) {
-    console.error("Reset notice failed", err);
-    return false;
-  }
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -115,156 +104,196 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-  const callerClient = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-
-  const { data: callerData, error: callerError } = await callerClient.auth.getUser();
-  if (callerError || !callerData.user) {
-    return jsonResponse({ error: "Unauthorized" }, 401);
-  }
-
-  const admin = createClient(supabaseUrl, serviceRoleKey);
-
-  const { data: callerProfile } = await admin
-    .from("profiles")
-    .select("role")
-    .eq("id", callerData.user.id)
-    .maybeSingle();
-
-  if (!callerProfile || !["full_admin", "registrar"].includes(callerProfile.role)) {
-    return jsonResponse({ error: "Forbidden" }, 403);
-  }
-
-  // The caller's session must have passed MFA (always true while enforcement is off).
-  const { data: mfaOk, error: mfaError } = await admin.rpc("mfa_check_session", {
-    p_session_id: sessionIdFrom(authHeader),
-    p_user_id: callerData.user.id,
-  });
-  if (mfaError || mfaOk !== true) {
-    if (mfaError) console.error("MFA check failed", mfaError);
-    return jsonResponse({ error: "Please verify your identity again: sign out and sign back in." }, 403);
-  }
-
-  let body: { email?: string; new_password?: string };
   try {
-    body = await req.json();
-  } catch {
-    return jsonResponse({ error: "Invalid JSON body" }, 400);
-  }
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-  // The previous form let the caller type the password. Refuse it rather than silently
-  // issuing a different password than the one the admin thinks they set.
-  if (body.new_password !== undefined) {
-    return jsonResponse({
-      error: "Password resets now issue a temporary password. Please refresh the page and try again.",
-    }, 400);
-  }
+    const callerClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
 
-  const email = body.email?.trim().toLowerCase();
-  if (!email) {
-    return jsonResponse({ error: "email is required" }, 400);
-  }
-
-  // Find the auth user by email. There is no direct "get user by email" admin API,
-  // so we page through users and match. This project's user base is small enough
-  // for this to be practical.
-  let targetUserId: string | null = null;
-  let page = 1;
-  const perPage = 200;
-  while (!targetUserId) {
-    const { data: pageData, error: listError } = await admin.auth.admin.listUsers({ page, perPage });
-    if (listError) {
-      return jsonResponse({ error: listError.message }, 500);
+    const { data: callerData, error: callerError } = await callerClient.auth.getUser();
+    if (callerError || !callerData.user) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
     }
-    const match = pageData.users.find((u) => u.email?.toLowerCase() === email);
-    if (match) {
-      targetUserId = match.id;
-      break;
+
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+
+    const { data: callerProfile } = await admin
+      .from("profiles")
+      .select("role")
+      .eq("id", callerData.user.id)
+      .maybeSingle();
+
+    if (!callerProfile || !["full_admin", "registrar"].includes(callerProfile.role)) {
+      return jsonResponse({ error: "Forbidden" }, 403);
     }
-    if (pageData.users.length < perPage) break;
-    page += 1;
-  }
 
-  if (!targetUserId) {
-    return jsonResponse({ error: "No registered account found with that email" }, 404);
-  }
+    // The caller's session must have passed MFA (always true while enforcement is off).
+    const { data: mfaOk, error: mfaError } = await admin.rpc("mfa_check_session", {
+      p_session_id: sessionIdFrom(authHeader),
+      p_user_id: callerData.user.id,
+    });
+    if (mfaError || mfaOk !== true) {
+      if (mfaError) console.error("MFA check failed", mfaError);
+      return jsonResponse({ error: "Please verify your identity again: sign out and sign back in." }, 403);
+    }
 
-  if (targetUserId === callerData.user.id) {
-    return jsonResponse({ error: "Use Change Password to change your own password." }, 400);
-  }
+    let body: { email?: string; new_password?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return jsonResponse({ error: "Invalid JSON body" }, 400);
+    }
 
-  const targetKind = await resolveTargetKind(admin, targetUserId);
-  if (!mayReset(callerProfile.role, targetKind)) {
-    await admin.from("audit_log").insert({
+    // Older forms sent a password; resets are now done by the owner through an emailed link.
+    if (body.new_password !== undefined) {
+      return jsonResponse({
+        error: "Password resets are now sent to the account holder by email. Please refresh the page and try again.",
+      }, 400);
+    }
+
+    const email = body.email?.trim().toLowerCase();
+    if (!email) {
+      return jsonResponse({ error: "email is required" }, 400);
+    }
+
+    // Find the auth user by email. There is no direct "get user by email" admin API,
+    // so we page through users and match. This project's user base is small enough
+    // for this to be practical.
+    let targetUserId: string | null = null;
+    let targetEmail = email;
+    for (let page = 1; !targetUserId; page++) {
+      const { data: pageData, error: listError } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+      if (listError) {
+        return jsonResponse({ error: listError.message }, 500);
+      }
+      const match = pageData.users.find((u) => u.email?.toLowerCase() === email);
+      if (match) {
+        targetUserId = match.id;
+        targetEmail = (match.email ?? email).toLowerCase();
+      }
+      if (pageData.users.length < 200) break;
+    }
+
+    if (!targetUserId) {
+      return jsonResponse({ error: "No registered account found with that email" }, 404);
+    }
+
+    if (targetUserId === callerData.user.id) {
+      return jsonResponse({ error: "Use Change Password to change your own password." }, 400);
+    }
+
+    const targetKind = await resolveTargetKind(admin, targetUserId);
+    if (!mayReset(callerProfile.role, targetKind)) {
+      await admin.from("audit_log").insert({
+        actor_id: callerData.user.id,
+        actor_role: callerProfile.role,
+        action: "password_reset_denied",
+        target_user_id: targetUserId,
+        details: { target_kind: targetKind },
+      });
+      const reason = targetKind === "full_admin"
+        ? "An administrator account cannot be reset here."
+        : "Registrars can only reset parent and student accounts.";
+      return jsonResponse({ error: reason }, 403);
+    }
+
+    if (targetEmail.endsWith(SYNTHETIC_EMAIL_DOMAIN)) {
+      return jsonResponse({ error: "This account has no real email inbox, so a reset email can't be sent." }, 400);
+    }
+    if (!RESEND_API_KEY) {
+      return jsonResponse({ error: "Email sending is not configured." }, 500);
+    }
+
+    // Security emails have their own daily budget so they can never eat the MFA codes' share.
+    const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "security" });
+    if (budgetError) console.error("Email budget check failed", budgetError);
+    if (withinBudget !== true) {
+      return jsonResponse({ error: "Today's limit for security emails has been reached. Please try again tomorrow." }, 429);
+    }
+
+    const origin = req.headers.get("Origin") ?? "";
+    const redirectTo = ALLOWED_REDIRECTS.includes(origin) ? origin : DEFAULT_REDIRECT;
+    const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+      type: "recovery",
+      email: targetEmail,
+      options: { redirectTo },
+    });
+    const actionLink = linkData?.properties?.action_link;
+    if (linkError || !actionLink) {
+      console.error("Could not create reset link", linkError);
+      return jsonResponse({ error: "Could not create a reset link. Please try again." }, 500);
+    }
+
+    const recoveryCode = generateRecoveryCode();
+    const { error: issueError } = await admin.rpc("mfa_issue_recovery_code", {
+      p_user_id: targetUserId,
+      p_code_hash: await sha256Hex(recoveryCode),
+      p_issued_by: callerData.user.id,
+    });
+    if (issueError) {
+      console.error("Could not issue recovery code", issueError);
+      return jsonResponse({ error: "Could not prepare the reset email. Please try again." }, 500);
+    }
+    const shownCode = `${recoveryCode.slice(0, 5)}-${recoveryCode.slice(5)}`;
+
+    const emailRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: FROM_ADDRESS,
+        to: targetEmail,
+        subject: "Reset your SIMS password",
+        html:
+          "<p>The school office started a password reset for your SIMS account. You have been signed out on all devices.</p>" +
+          `<p><a href="${escapeHtml(actionLink)}" style="display:inline-block;padding:10px 18px;background:#1a2b4a;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:bold;">Choose a new password</a></p>` +
+          "<p>This link works once and expires soon. If it has expired, ask the school office to send a new one.</p>" +
+          "<p>After you click the link you will be asked to verify your identity. Choose <strong>Use a recovery code</strong> and enter:</p>" +
+          `<h2 style="letter-spacing:4px;font-family:monospace;">${shownCode}</h2>` +
+          "<p>The recovery code works once and expires in 24 hours.</p>" +
+          "<p>If you did not ask for this, you can ignore this email; your current password still works. Please let the school office know.</p>",
+      }),
+    });
+    if (!emailRes.ok) {
+      console.error("Reset email failed", emailRes.status, await emailRes.text());
+      await admin.from("audit_log").insert({
+        actor_id: callerData.user.id,
+        actor_role: callerProfile.role,
+        action: "password_reset_email_failed",
+        target_user_id: targetUserId,
+        details: { target_kind: targetKind },
+      });
+      return jsonResponse({ error: "The reset email could not be sent. Please try again later." }, 502);
+    }
+
+    // Sign the account out everywhere and forget its remembered (MFA-trusted) devices.
+    const { data: sessionsRevoked, error: revokeError } = await admin.rpc("admin_revoke_user_sessions", {
+      p_user_id: targetUserId,
+    });
+    if (revokeError) console.error("Session revoke failed", revokeError);
+    const { error: devicesError } = await admin.from("trusted_devices").delete().eq("user_id", targetUserId);
+    if (devicesError) console.error("Trusted device cleanup failed", devicesError);
+
+    const { error: auditError } = await admin.from("audit_log").insert({
       actor_id: callerData.user.id,
       actor_role: callerProfile.role,
-      action: "password_reset_denied",
+      action: "password_reset_email_sent",
       target_user_id: targetUserId,
-      details: { target_kind: targetKind },
+      details: {
+        target_kind: targetKind,
+        recovery_code_included: true,
+        sessions_revoked: revokeError ? null : sessionsRevoked,
+        trusted_devices_cleared: !devicesError,
+      },
     });
-    const reason = targetKind === "full_admin"
-      ? "An administrator account cannot be reset here."
-      : "Registrars can only reset parent and student accounts.";
-    return jsonResponse({ error: reason }, 403);
+    if (auditError) console.error("Audit log insert failed", auditError);
+
+    return jsonResponse({ success: true, sent_to: maskEmail(targetEmail) });
+  } catch (err) {
+    console.error(err);
+    return jsonResponse({ error: "Unexpected error" }, 500);
   }
-
-  const { data: targetUser, error: getError } = await admin.auth.admin.getUserById(targetUserId);
-  if (getError || !targetUser.user) {
-    return jsonResponse({ error: getError?.message ?? "Could not load target account" }, 500);
-  }
-
-  const temporaryPassword = generateTemporaryPassword();
-  const { error: updateError } = await admin.auth.admin.updateUserById(targetUserId, {
-    password: temporaryPassword,
-    user_metadata: { ...targetUser.user.user_metadata, password_set: false },
-  });
-
-  if (updateError) {
-    return jsonResponse({ error: updateError.message }, 500);
-  }
-
-  // Server-side "must set your own password" (the owner can't clear it by editing their
-  // metadata). Must come after the password update: a password change clears the flag.
-  const { error: requireError } = await admin.rpc("mark_password_change_required", {
-    p_user_id: targetUserId,
-    p_reason: "admin_reset",
-  });
-  if (requireError) console.error("Could not flag password change", requireError);
-
-  // Sign the account out everywhere and forget its remembered (MFA-trusted) devices.
-  const { data: sessionsRevoked, error: revokeError } = await admin.rpc("admin_revoke_user_sessions", {
-    p_user_id: targetUserId,
-  });
-  if (revokeError) console.error("Session revoke failed", revokeError);
-  const { error: devicesError } = await admin.from("trusted_devices").delete().eq("user_id", targetUserId);
-  if (devicesError) console.error("Trusted device cleanup failed", devicesError);
-
-  const noticeSent = await sendResetNotice(admin, targetUser.user.email ?? email);
-
-  const { error: auditError } = await admin.from("audit_log").insert({
-    actor_id: callerData.user.id,
-    actor_role: callerProfile.role,
-    action: "password_reset",
-    target_user_id: targetUserId,
-    details: {
-      target_kind: targetKind,
-      sessions_revoked: revokeError ? null : sessionsRevoked,
-      trusted_devices_cleared: !devicesError,
-      password_change_required: !requireError,
-      notice_emailed: noticeSent,
-    },
-  });
-  if (auditError) console.error("Audit log insert failed", auditError);
-
-  return jsonResponse({
-    success: true,
-    temporary_password: temporaryPassword,
-    notice_emailed: noticeSent,
-  });
 });

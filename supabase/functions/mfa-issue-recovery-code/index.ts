@@ -1,14 +1,26 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
-// Issues a one-time MFA recovery code (valid 24 hours) that the account owner types on the
-// verification screen instead of an emailed code — for when email is unavailable (daily
-// budget used up, unreachable inbox, synthetic @missionschool.edu.ph address).
+// Emails a one-time sign-in recovery code (valid 24 hours) straight to the account holder,
+// who enters it on the verification screen instead of the usual emailed 6-digit code (e.g.
+// when the code emails are rate-limited or verification is locked). The caller never sees
+// the code, so a compromised admin portal can't use it to get into anyone's account.
 // Same who-may-act-on-whom rules as admin-reset-password:
 //   registrar  -> parent and student accounts only
 //   full_admin -> any account except a full_admin
 //   a full_admin is recovered from the Supabase SQL Editor: select private.emergency_recovery_code('<email>');
-// Body: { email }. Returns { code, expires_at } — shown once, never stored in plain text.
+// Body: { email }. Returns { success, sent_to } where sent_to is masked (j•••@gmail.com).
+
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
+const FROM_ADDRESS = "Dumaguete Mission SIMS <dumaguetemissionschool@dmsis.app>";
+// Generated logins (jdelacruz.student@missionschool.edu.ph) have no real inbox.
+const SYNTHETIC_EMAIL_DOMAIN = "@missionschool.edu.ph";
+
+// j•••@gmail.com — enough for the admin to confirm the right account, nothing more.
+function maskEmail(email: string): string {
+  const [local, domain] = email.split("@");
+  return `${local.slice(0, 1)}•••@${domain ?? ""}`;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,10 +131,15 @@ Deno.serve(async (req: Request) => {
     }
 
     let targetUserId: string | null = null;
+    let targetEmail = email;
     for (let page = 1; !targetUserId; page++) {
       const { data: pageData, error: listError } = await admin.auth.admin.listUsers({ page, perPage: 200 });
       if (listError) return jsonResponse({ error: listError.message }, 500);
-      targetUserId = pageData.users.find((u) => u.email?.toLowerCase() === email)?.id ?? null;
+      const match = pageData.users.find((u) => u.email?.toLowerCase() === email);
+      if (match) {
+        targetUserId = match.id;
+        targetEmail = (match.email ?? email).toLowerCase();
+      }
       if (pageData.users.length < 200) break;
     }
     if (!targetUserId) {
@@ -149,8 +166,22 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: reason }, 403);
     }
 
+    if (targetEmail.endsWith(SYNTHETIC_EMAIL_DOMAIN)) {
+      return jsonResponse({ error: "This account has no real email inbox, so a recovery code can't be sent." }, 400);
+    }
+    if (!RESEND_API_KEY) {
+      return jsonResponse({ error: "Email sending is not configured." }, 500);
+    }
+
+    // Security emails have their own daily budget so they can never eat the MFA codes' share.
+    const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "security" });
+    if (budgetError) console.error("Email budget check failed", budgetError);
+    if (withinBudget !== true) {
+      return jsonResponse({ error: "Today's limit for security emails has been reached. Please try again tomorrow." }, 429);
+    }
+
     const code = generateRecoveryCode();
-    const { data: expiresAt, error: issueError } = await admin.rpc("mfa_issue_recovery_code", {
+    const { error: issueError } = await admin.rpc("mfa_issue_recovery_code", {
       p_user_id: targetUserId,
       p_code_hash: await sha256Hex(code),
       p_issued_by: callerData.user.id,
@@ -159,17 +190,38 @@ Deno.serve(async (req: Request) => {
       console.error(issueError);
       return jsonResponse({ error: "Could not issue a recovery code" }, 500);
     }
+    const shownCode = `${code.slice(0, 5)}-${code.slice(5)}`;
+
+    const emailRes = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: FROM_ADDRESS,
+        to: targetEmail,
+        subject: "Your SIMS sign-in recovery code",
+        html:
+          "<p>The school office sent you a one-time recovery code for signing in to SIMS:</p>" +
+          `<h2 style="letter-spacing:4px;font-family:monospace;">${shownCode}</h2>` +
+          "<p>After entering your password, choose <strong>Use a recovery code</strong> on the verification screen and enter this code. It works once and expires in 24 hours.</p>" +
+          "<p>If you did not ask for this, please let the school office know. Nobody can use this code without also knowing your password.</p>",
+      }),
+    });
+    const sent = emailRes.ok;
+    if (!sent) console.error("Recovery code email failed", emailRes.status, await emailRes.text());
 
     const { error: auditError } = await admin.from("audit_log").insert({
       actor_id: callerData.user.id,
       actor_role: callerProfile.role,
-      action: "mfa_recovery_code_issued",
+      action: sent ? "mfa_recovery_code_emailed" : "mfa_recovery_code_email_failed",
       target_user_id: targetUserId,
       details: { target_kind: targetKind, via: "admin" },
     });
     if (auditError) console.error("Audit log insert failed", auditError);
 
-    return jsonResponse({ code: `${code.slice(0, 5)}-${code.slice(5)}`, expires_at: expiresAt });
+    if (!sent) {
+      return jsonResponse({ error: "The recovery code email could not be sent. Please try again later." }, 502);
+    }
+    return jsonResponse({ success: true, sent_to: maskEmail(targetEmail) });
   } catch (err) {
     console.error(err);
     return jsonResponse({ error: "Unexpected error" }, 500);

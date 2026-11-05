@@ -16,6 +16,9 @@ interface MfaVerifyScreenProps {
     // no login form in play, so this screen manages and shows its own checkbox.
     rememberDevice?: boolean;
     showOwnRememberCheckbox?: boolean;
+    // Start in recovery-code mode without emailing a code (e.g. arriving from a password
+    // reset email, which already contains a recovery code).
+    preferRecoveryCode?: boolean;
 }
 
 // Full-page email verification step, shown whenever a signed-in user's device
@@ -28,12 +31,13 @@ export function MfaVerifyScreen({
     onCancel,
     rememberDevice: controlledRememberDevice,
     showOwnRememberCheckbox = false,
+    preferRecoveryCode = false,
 }: MfaVerifyScreenProps) {
     const [ownRememberDevice, setOwnRememberDevice] = useState(false);
     const rememberDevice = showOwnRememberCheckbox ? ownRememberDevice : (controlledRememberDevice ?? false);
     const [mfaCode, setMfaCode] = useState("");
     // Recovery mode: a one-time code from the school office replaces the emailed code.
-    const [useRecoveryCode, setUseRecoveryCode] = useState(false);
+    const [useRecoveryCode, setUseRecoveryCode] = useState(preferRecoveryCode);
     const [mfaError, setMfaError] = useState("");
     const [isVerifying, setIsVerifying] = useState(false);
     const [isResending, setIsResending] = useState(false);
@@ -58,12 +62,13 @@ export function MfaVerifyScreen({
     };
 
     // The code is requested here, on the MFA screen, rather than at login or on page
-    // refresh. A still-valid code is reused instead of sending another email.
+    // refresh. A still-valid code is reused instead of sending another email. In
+    // recovery-code mode nothing is sent until the user switches to the emailed code.
     useEffect(() => {
-        if (initialRequestMade.current) return;
+        if (useRecoveryCode || initialRequestMade.current) return;
         initialRequestMade.current = true;
         sendMfaCode(userId).then((result) => applySendResult(result, false));
-    }, [userId]);
+    }, [userId, useRecoveryCode]);
 
     useEffect(() => {
         if (resendCooldown <= 0) return;

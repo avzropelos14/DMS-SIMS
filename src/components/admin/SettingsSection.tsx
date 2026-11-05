@@ -23,8 +23,7 @@ import { type SchoolYear } from "../../lib/schoolYear";
 import { getSchoolSettings } from "../../lib/schoolSettings";
 import { functionErrorMessage, deleteAuthAccountFor } from "../../lib/accounts";
 import { getCurrentSchoolYearId } from "../../lib/students";
-import { PasswordResetSection } from "./PasswordResetSection";
-import { MfaRecoveryCodeSection } from "./MfaRecoveryCodeSection";
+import { AccountRecoveryPage } from "./AccountRecoveryPage";
 import { ChangeSchoolYearModal } from "./ChangeSchoolYearModal";
 import { ManageAccountsModal } from "./ManageAccountsModal";
 
@@ -328,7 +327,7 @@ export function SettingsSection({
     const [accountsLoading, setAccountsLoading] = useState(true);
     const [accountsError, setAccountsError] = useState<string | null>(null);
     const [showManageAccounts, setShowManageAccounts] = useState(false);
-    const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
+    const [showAccountRecovery, setShowAccountRecovery] = useState(false);
 
     const loadAccounts = async () => {
         setAccountsLoading(true);
@@ -627,6 +626,11 @@ export function SettingsSection({
             setGpUpdating(null);
         }
     };
+
+    // Account Recovery opens as its own page in place of the settings content.
+    if (showAccountRecovery) {
+        return <AccountRecoveryPage onBack={() => setShowAccountRecovery(false)} />;
+    }
 
     return (
         <>
@@ -1276,10 +1280,10 @@ export function SettingsSection({
                                 <UserPlus className="w-4 h-4" /> Manage Accounts
                             </button>
                             <button
-                                onClick={() => setShowPasswordResetModal(true)}
+                                onClick={() => setShowAccountRecovery(true)}
                                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border-2 border-[#1a2b4a] text-[#1a2b4a] rounded-lg font-medium hover:bg-[#faf8f5] transition-all"
                             >
-                                <Lock className="w-4 h-4" /> Reset Password
+                                <Lock className="w-4 h-4" /> Account Recovery
                             </button>
                         </div>
                     </div>
@@ -1349,22 +1353,6 @@ export function SettingsSection({
                 />
             )}
 
-            {showPasswordResetModal && (
-                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="relative w-full max-w-md">
-                        <button
-                            onClick={() => setShowPasswordResetModal(false)}
-                            className="absolute -top-3 -right-3 p-1.5 bg-white rounded-full shadow-lg hover:bg-gray-100 z-10"
-                        >
-                            <X className="w-4 h-4 text-[#1a2b4a]" />
-                        </button>
-                        <div className="max-h-[90vh] overflow-y-auto rounded-2xl space-y-4">
-                            <PasswordResetSection />
-                            <MfaRecoveryCodeSection />
-                        </div>
-                    </div>
-                </div>
-            )}
         </>
     );
 }

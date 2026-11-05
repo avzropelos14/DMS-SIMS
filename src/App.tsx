@@ -18,6 +18,14 @@ import type { User } from '@supabase/supabase-js';
 
 export type UserRole = 'admin' | 'registrar' | 'teacher' | 'student' | 'parent' | 'guard' | 'cashier' | null;
 
+// Read once at load, before the auth client consumes and clears the URL: the page was
+// opened from an emailed password reset link (…#access_token=…&type=recovery).
+const OPENED_FROM_RESET_LINK =
+  typeof window !== 'undefined' && /(^|[#&?])type=recovery(&|$)/.test(window.location.hash + window.location.search);
+// An expired or already-used emailed link comes back as …#error_code=otp_expired.
+const OPENED_FROM_EXPIRED_LINK =
+  typeof window !== 'undefined' && /error_code=otp_expired/.test(window.location.hash + window.location.search);
+
 function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>(null);
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -25,9 +33,13 @@ function App() {
   const [enrollmentFees, setEnrollmentFees] = useState<Record<string, number>>(DEFAULT_ENROLLMENT_FEES);
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
-  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(OPENED_FROM_RESET_LINK);
   const [mfaPending, setMfaPending] = useState<{ user: User } | null>(null);
-  const [loginNotice, setLoginNotice] = useState('');
+  const [loginNotice, setLoginNotice] = useState(
+    OPENED_FROM_EXPIRED_LINK
+      ? 'This email link has expired or was already used. Please ask the school office to send a new one.'
+      : '',
+  );
   const lastMfaRecheck = useRef(0);
 
   // Runs once the session has passed MFA (code, recovery code, remembered device, or an
@@ -238,6 +250,8 @@ function App() {
         userId={mfaPending.user.id}
         userEmail={mfaPending.user.email}
         showOwnRememberCheckbox
+        // The reset email already contains a recovery code; don't spend a second email.
+        preferRecoveryCode={passwordRecoveryMode}
         onCancel={handleLogout}
         onVerified={() => {
           setMfaPending(null);
