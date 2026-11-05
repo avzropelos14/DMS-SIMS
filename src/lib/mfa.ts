@@ -37,6 +37,24 @@ async function errorBody(error: unknown): Promise<FunctionErrorBody | null> {
     return null;
 }
 
+// What the database says about the current session. Safe to ask before MFA: booleans only.
+//   provisioned           the account is linked to a staff profile, guardian or student
+//   mfa_required          the database enforces MFA for this account right now
+//   mfa_verified          this session already passed MFA (valid for one school day)
+//   must_change_password  server-side flag set by an admin reset or a new account
+export interface LoginStatus {
+    provisioned: boolean;
+    mfa_required: boolean;
+    mfa_verified: boolean;
+    must_change_password: boolean;
+}
+
+export async function getLoginStatus(): Promise<LoginStatus | null> {
+    const { data, error } = await supabase.rpc('my_login_status');
+    if (error || !data) return null;
+    return data as LoginStatus;
+}
+
 export interface CheckTrustedDeviceResult {
     trusted: boolean;
     error?: string;
@@ -96,9 +114,16 @@ export interface VerifyMfaCodeResult {
     locked?: boolean;
 }
 
-export async function verifyMfaCode(userId: string, code: string, rememberDevice: boolean): Promise<VerifyMfaCodeResult> {
+// `kind: 'recovery'` sends a one-time recovery code issued by the school office instead
+// of the emailed 6-digit code.
+export async function verifyMfaCode(
+    userId: string,
+    code: string,
+    rememberDevice: boolean,
+    kind: 'email' | 'recovery' = 'email',
+): Promise<VerifyMfaCodeResult> {
     const { data, error } = await supabase.functions.invoke('mfa-verify-code', {
-        body: { code, rememberDevice },
+        body: kind === 'recovery' ? { recoveryCode: code, rememberDevice } : { code, rememberDevice },
     });
     if (error) {
         const body = await errorBody(error);

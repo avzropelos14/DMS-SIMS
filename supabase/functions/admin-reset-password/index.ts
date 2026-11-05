@@ -26,6 +26,19 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Session id of the caller's access token. Only read after getUser() has validated the token.
+function sessionIdFrom(authHeader: string): string | null {
+  const payload = authHeader.replace(/^Bearer\s+/i, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return typeof claims.session_id === "string" ? claims.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
 // 14 characters from an alphabet without look-alikes (0/O, 1/l/I), with rejection
 // sampling so every character is equally likely.
 function generateTemporaryPassword(length = 14): string {
@@ -65,8 +78,12 @@ function mayReset(callerRole: string, target: TargetKind): boolean {
   return false;
 }
 
-async function sendResetNotice(to: string): Promise<boolean> {
+async function sendResetNotice(admin: SupabaseClient, to: string): Promise<boolean> {
   if (!RESEND_API_KEY || to.toLowerCase().endsWith(SYNTHETIC_EMAIL_DOMAIN)) return false;
+  // Security notices have their own daily budget (20) so they can never eat the MFA codes' share.
+  const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "security" });
+  if (budgetError) console.error("Email budget check failed", budgetError);
+  if (withinBudget !== true) return false;
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -122,6 +139,16 @@ Deno.serve(async (req: Request) => {
 
   if (!callerProfile || !["full_admin", "registrar"].includes(callerProfile.role)) {
     return jsonResponse({ error: "Forbidden" }, 403);
+  }
+
+  // The caller's session must have passed MFA (always true while enforcement is off).
+  const { data: mfaOk, error: mfaError } = await admin.rpc("mfa_check_session", {
+    p_session_id: sessionIdFrom(authHeader),
+    p_user_id: callerData.user.id,
+  });
+  if (mfaError || mfaOk !== true) {
+    if (mfaError) console.error("MFA check failed", mfaError);
+    return jsonResponse({ error: "Please verify your identity again: sign out and sign back in." }, 403);
   }
 
   let body: { email?: string; new_password?: string };
@@ -202,6 +229,14 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: updateError.message }, 500);
   }
 
+  // Server-side "must set your own password" (the owner can't clear it by editing their
+  // metadata). Must come after the password update: a password change clears the flag.
+  const { error: requireError } = await admin.rpc("mark_password_change_required", {
+    p_user_id: targetUserId,
+    p_reason: "admin_reset",
+  });
+  if (requireError) console.error("Could not flag password change", requireError);
+
   // Sign the account out everywhere and forget its remembered (MFA-trusted) devices.
   const { data: sessionsRevoked, error: revokeError } = await admin.rpc("admin_revoke_user_sessions", {
     p_user_id: targetUserId,
@@ -210,7 +245,7 @@ Deno.serve(async (req: Request) => {
   const { error: devicesError } = await admin.from("trusted_devices").delete().eq("user_id", targetUserId);
   if (devicesError) console.error("Trusted device cleanup failed", devicesError);
 
-  const noticeSent = await sendResetNotice(targetUser.user.email ?? email);
+  const noticeSent = await sendResetNotice(admin, targetUser.user.email ?? email);
 
   const { error: auditError } = await admin.from("audit_log").insert({
     actor_id: callerData.user.id,
@@ -221,6 +256,7 @@ Deno.serve(async (req: Request) => {
       target_kind: targetKind,
       sessions_revoked: revokeError ? null : sessionsRevoked,
       trusted_devices_cleared: !devicesError,
+      password_change_required: !requireError,
       notice_emailed: noticeSent,
     },
   });

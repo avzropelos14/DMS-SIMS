@@ -32,6 +32,19 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Session id of the caller's access token. Only read after getUser() has validated the token.
+function sessionIdFrom(authHeader: string): string | null {
+  const payload = authHeader.replace(/^Bearer\s+/i, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return typeof claims.session_id === "string" ? claims.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function baseLocalPart(firstName: string, lastName: string): string {
   const first = (firstName.trim()[0] ?? "").toLowerCase();
   const last = lastName.trim().toLowerCase().replace(/[^a-z]/g, "");
@@ -70,6 +83,16 @@ async function handleRequest(req: Request): Promise<Response> {
 
   if (!callerProfile || !["full_admin", "registrar"].includes(callerProfile.role)) {
     return jsonResponse({ error: "Forbidden" }, 403);
+  }
+
+  // The caller's session must have passed MFA (always true while enforcement is off).
+  const { data: mfaOk, error: mfaError } = await admin.rpc("mfa_check_session", {
+    p_session_id: sessionIdFrom(authHeader),
+    p_user_id: callerData.user.id,
+  });
+  if (mfaError || mfaOk !== true) {
+    if (mfaError) console.error("MFA check failed", mfaError);
+    return jsonResponse({ error: "Please verify your identity again: sign out and sign back in." }, 403);
   }
 
   let body: { student_id?: string; email?: string };
@@ -165,6 +188,13 @@ async function handleRequest(req: Request): Promise<Response> {
     await admin.auth.admin.deleteUser(authUserId);
     return jsonResponse({ error: linkError.message }, 500);
   }
+
+  // Server-side "must set your own password" (cleared by the first real password change).
+  const { error: requireError } = await admin.rpc("mark_password_change_required", {
+    p_user_id: authUserId,
+    p_reason: "new_account",
+  });
+  if (requireError) console.error("Could not flag password change", requireError);
 
   const { error: auditError } = await admin.from("audit_log").insert({
     actor_id: callerData.user.id,

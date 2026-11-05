@@ -14,6 +14,19 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Session id of the caller's access token. Only read after getUser() has validated the token.
+function sessionIdFrom(authHeader: string): string | null {
+  const payload = authHeader.replace(/^Bearer\s+/i, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return typeof claims.session_id === "string" ? claims.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -49,6 +62,16 @@ Deno.serve(async (req: Request) => {
   // restricted to full admins only (registrars can create accounts but not remove them).
   if (!callerProfile || callerProfile.role !== "full_admin") {
     return jsonResponse({ error: "Forbidden — only a full admin can remove authenticated users" }, 403);
+  }
+
+  // The caller's session must have passed MFA (always true while enforcement is off).
+  const { data: mfaOk, error: mfaError } = await admin.rpc("mfa_check_session", {
+    p_session_id: sessionIdFrom(authHeader),
+    p_user_id: callerData.user.id,
+  });
+  if (mfaError || mfaOk !== true) {
+    if (mfaError) console.error("MFA check failed", mfaError);
+    return jsonResponse({ error: "Please verify your identity again: sign out and sign back in." }, 403);
   }
 
   let body: { student_id?: string; employee_id?: string; user_id?: string };

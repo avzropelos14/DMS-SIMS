@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LoginScreen } from './components/LoginScreen';
 import { SetPasswordScreen } from './components/SetPasswordScreen';
 import { MfaVerifyScreen } from './components/MfaVerifyScreen';
@@ -11,7 +11,7 @@ import { GuardPortal } from './components/GuardPortal';
 import { CashierPortal } from './components/CashierPortal';
 import { supabase } from './supabase';
 import { resolveIdentity } from './lib/resolveRole';
-import { checkTrustedDevice } from './lib/mfa';
+import { checkTrustedDevice, getLoginStatus } from './lib/mfa';
 import { clearPersistedViews } from './lib/usePersistedView';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES } from './lib/tuition';
 import type { User } from '@supabase/supabase-js';
@@ -26,7 +26,38 @@ function App() {
   const [isRestoringSession, setIsRestoringSession] = useState(true);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
-  const [mfaPending, setMfaPending] = useState<{ user: User; identity: Awaited<ReturnType<typeof resolveIdentity>> } | null>(null);
+  const [mfaPending, setMfaPending] = useState<{ user: User } | null>(null);
+  const [loginNotice, setLoginNotice] = useState('');
+  const lastMfaRecheck = useRef(0);
+
+  // Runs once the session has passed MFA (code, recovery code, remembered device, or an
+  // already-verified session on refresh). The database only releases data after MFA, so
+  // identity is resolved here and never before. Returns an error message on failure.
+  const completeLogin = async (): Promise<string | null> => {
+    const { data } = await supabase.auth.getSession();
+    const user = data.session?.user;
+    if (!user) return 'Your session has ended. Please sign in again.';
+    const status = await getLoginStatus();
+    if (!status) return "Couldn't reach the server. Please try again.";
+    if (status.mfa_required && !status.mfa_verified) {
+      return "Your verification couldn't be completed. Please sign in again.";
+    }
+    // The server-side flag can't be cleared by the account owner; the metadata flag is
+    // kept as a fallback for accounts created before it existed.
+    if (status.must_change_password || user.user_metadata?.password_set === false) {
+      setCurrentRole(null);
+      setCurrentUser(null);
+      setNeedsPasswordSetup(true);
+      return null;
+    }
+    const identity = await resolveIdentity(user.id);
+    if (!identity) return 'Email is unauthorized. Contact an administrator.';
+    setNeedsPasswordSetup(false);
+    setLoginNotice('');
+    setCurrentRole(identity.role);
+    setCurrentUser(identity.userData);
+    return null;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -58,20 +89,20 @@ function App() {
         if (!cancelled) setIsRestoringSession(false);
         return;
       }
-      const identity = await resolveIdentity(user.id);
+      const status = await getLoginStatus();
       if (cancelled) return;
-      if (identity) {
-        // A persisted auth session alone doesn't prove this device passed MFA —
-        // re-check trust so a page refresh can't be used to skip the code step.
-        // checkOnly: a refresh never emails a code; the MFA screen requests one.
-        const mfaResult = await checkTrustedDevice(user.id);
+      if (status?.provisioned) {
+        // A persisted auth session alone doesn't prove this device passed MFA. A session
+        // already verified today passes; otherwise a remembered device does (checkOnly:
+        // a refresh never emails a code; the MFA screen requests one).
+        const passes = status.mfa_verified || (await checkTrustedDevice(user.id)).trusted;
         if (cancelled) return;
-        if (mfaResult.trusted) {
-          setCurrentRole(identity.role);
-          setCurrentUser(identity.userData);
-          setNeedsPasswordSetup(user.user_metadata?.password_set === false);
+        if (passes) {
+          const failure = await completeLogin();
+          if (cancelled) return;
+          if (failure) setLoginNotice(failure);
         } else {
-          setMfaPending({ user, identity });
+          setMfaPending({ user });
         }
       }
       setIsRestoringSession(false);
@@ -100,11 +131,36 @@ function App() {
     };
   }, []);
 
-  const handleLogin = (role: UserRole, userData: any, authUser?: { user_metadata?: Record<string, any> }) => {
-    setCurrentRole(role);
-    setCurrentUser(userData);
-    setNeedsPasswordSetup(authUser?.user_metadata?.password_set === false);
-  };
+  // A verified session lasts one school day. When it lapses while a tab is open, the
+  // database starts returning empty results, so re-check whenever the tab comes back
+  // into view and every 10 minutes: a remembered device re-verifies silently, otherwise
+  // the code screen is shown.
+  useEffect(() => {
+    if (!currentRole) return;
+    let disposed = false;
+    const recheck = async (force = false) => {
+      if (document.visibilityState !== 'visible') return;
+      if (!force && Date.now() - lastMfaRecheck.current < 60_000) return;
+      lastMfaRecheck.current = Date.now();
+      const status = await getLoginStatus();
+      if (disposed || !status || !status.mfa_required || status.mfa_verified) return;
+      const { data } = await supabase.auth.getSession();
+      const user = data.session?.user;
+      if (!user) return;
+      const trusted = await checkTrustedDevice(user.id);
+      if (!disposed && !trusted.trusted) setMfaPending({ user });
+    };
+    const onVisible = () => { void recheck(); };
+    const interval = window.setInterval(() => { void recheck(true); }, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [currentRole]);
 
   // Returns an error message on failure (so the Admin UI can surface it instead of
   // showing "Saved!" when an RLS rejection or network error silently dropped the write).
@@ -160,6 +216,16 @@ function App() {
     setNeedsPasswordSetup(false);
     setPasswordRecoveryMode(false);
     setMfaPending(null);
+    setLoginNotice('');
+  };
+
+  // For screens shown outside the login form: on failure, sign out and show the reason there.
+  const completeLoginOrSignOut = async () => {
+    const failure = await completeLogin();
+    if (failure) {
+      await handleLogout();
+      setLoginNotice(failure);
+    }
   };
 
   if (isRestoringSession) {
@@ -174,13 +240,8 @@ function App() {
         showOwnRememberCheckbox
         onCancel={handleLogout}
         onVerified={() => {
-          const { user, identity } = mfaPending;
           setMfaPending(null);
-          if (identity) {
-            setCurrentRole(identity.role);
-            setCurrentUser(identity.userData);
-            setNeedsPasswordSetup(user.user_metadata?.password_set === false);
-          }
+          void completeLoginOrSignOut();
         }}
       />
     );
@@ -191,33 +252,38 @@ function App() {
       <SetPasswordScreen
         mode="recovery"
         onDone={async () => {
-          const { data } = await supabase.auth.getUser();
-          const user = data.user;
           setPasswordRecoveryMode(false);
+          const { data } = await supabase.auth.getSession();
+          const user = data.session?.user;
           if (!user) return;
-          const identity = await resolveIdentity(user.id);
-          if (identity) {
-            setCurrentRole(identity.role);
-            setCurrentUser(identity.userData);
+          // A reset link proves the inbox, but the session still has to pass MFA before
+          // the database releases data.
+          const status = await getLoginStatus();
+          if (status && !status.mfa_verified && !(await checkTrustedDevice(user.id)).trusted) {
+            setMfaPending({ user });
+            return;
           }
+          await completeLoginOrSignOut();
         }}
         onSignOut={handleLogout}
       />
     );
   }
 
-  if (!currentRole) {
-    return <LoginScreen onLogin={handleLogin} />;
-  }
-
+  // Shown before any data loads: until the password is changed, the database (once
+  // enforcement is on) returns nothing to this account.
   if (needsPasswordSetup) {
     return (
       <SetPasswordScreen
         mode="first-login"
-        onDone={() => setNeedsPasswordSetup(false)}
+        onDone={() => { void completeLoginOrSignOut(); }}
         onSignOut={handleLogout}
       />
     );
+  }
+
+  if (!currentRole) {
+    return <LoginScreen initialError={loginNotice} onAuthenticated={completeLogin} />;
   }
 
   return (

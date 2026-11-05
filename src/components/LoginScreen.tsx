@@ -1,22 +1,28 @@
 import { useState, useEffect } from "react";
 import { ArrowRight, Mail, Lock, AlertCircle } from "lucide-react";
-import type { UserRole } from "../App";
 import schoolLogo from "./assets/dmgteLogo.jpg";
 import { supabase } from './../supabase';
-import { resolveIdentity } from '../lib/resolveRole';
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
-import { checkTrustedDevice } from '../lib/mfa';
+import { checkTrustedDevice, getLoginStatus } from '../lib/mfa';
 import { MfaVerifyScreen } from './MfaVerifyScreen';
 import type { User } from '@supabase/supabase-js';
 
 interface LoginScreenProps {
-    onLogin: (role: UserRole, userData: any, authUser?: { user_metadata?: Record<string, any> }) => void;
+    // Called once the session has passed MFA. Loads the account's data (which the
+    // database only releases after MFA) and returns an error message on failure.
+    onAuthenticated: () => Promise<string | null>;
+    // A message to show on arrival, e.g. after a failed session restore.
+    initialError?: string;
 }
 
-export function LoginScreen({ onLogin }: LoginScreenProps) {
+const UNAUTHORIZED_MESSAGE = "Email is unauthorized. Contact an administrator.";
+
+export function LoginScreen({ onAuthenticated, initialError = "" }: LoginScreenProps) {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const [error, setError] = useState("");
+    const [ownError, setError] = useState("");
+    // A notice from the app (e.g. a failed session restore) shows until this form has its own.
+    const error = ownError || initialError;
     const [showPassword, setShowPassword] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [rememberDevice, setRememberDevice] = useState(false);
@@ -25,7 +31,18 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
     const [mfaStep, setMfaStep] = useState(false);
     const [pendingUser, setPendingUser] = useState<User | null>(null);
-    const [pendingIdentity, setPendingIdentity] = useState<Awaited<ReturnType<typeof resolveIdentity>>>(null);
+
+    // Runs after MFA. On failure, signs out and returns to the form with the reason.
+    const finishSignIn = async () => {
+        const failure = await onAuthenticated();
+        if (failure) {
+            await supabase.auth.signOut();
+            setMfaStep(false);
+            setPendingUser(null);
+            setPassword("");
+            setError(failure);
+        }
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -54,12 +71,17 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 return;
             }
 
-            const identity = await resolveIdentity(data.user.id);
-            if (!identity) {
+            // Before MFA the database only answers this narrow question: is the account
+            // linked to anyone? Unlinked accounts never get a code email.
+            const status = await getLoginStatus();
+            if (!status) {
                 await supabase.auth.signOut();
-                setError(
-                    "Email is unauthorized. Contact an administrator.",
-                );
+                setError("Couldn't reach the server. Please try again.");
+                return;
+            }
+            if (!status.provisioned) {
+                await supabase.auth.signOut();
+                setError(UNAUTHORIZED_MESSAGE);
                 return;
             }
 
@@ -72,12 +94,11 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             }
 
             if (mfaResult.trusted) {
-                onLogin(identity.role, identity.userData, data.user);
+                await finishSignIn();
                 return;
             }
 
             setPendingUser(data.user);
-            setPendingIdentity(identity);
             setMfaStep(true);
         } catch {
             setError("Couldn't reach the server. Please try again.");
@@ -90,18 +111,17 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         await supabase.auth.signOut();
         setMfaStep(false);
         setPendingUser(null);
-        setPendingIdentity(null);
         setPassword("");
     };
 
-    if (mfaStep && pendingUser && pendingIdentity) {
+    if (mfaStep && pendingUser) {
         return (
             <MfaVerifyScreen
                 userId={pendingUser.id}
                 userEmail={pendingUser.email}
                 rememberDevice={rememberDevice}
                 onCancel={handleCancelMfa}
-                onVerified={() => onLogin(pendingIdentity.role, pendingIdentity.userData, pendingUser)}
+                onVerified={() => { void finishSignIn(); }}
             />
         );
     }

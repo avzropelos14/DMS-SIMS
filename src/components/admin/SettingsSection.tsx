@@ -24,6 +24,7 @@ import { getSchoolSettings } from "../../lib/schoolSettings";
 import { functionErrorMessage, deleteAuthAccountFor } from "../../lib/accounts";
 import { getCurrentSchoolYearId } from "../../lib/students";
 import { PasswordResetSection } from "./PasswordResetSection";
+import { MfaRecoveryCodeSection } from "./MfaRecoveryCodeSection";
 import { ChangeSchoolYearModal } from "./ChangeSchoolYearModal";
 import { ManageAccountsModal } from "./ManageAccountsModal";
 
@@ -1357,7 +1358,10 @@ export function SettingsSection({
                         >
                             <X className="w-4 h-4 text-[#1a2b4a]" />
                         </button>
-                        <PasswordResetSection />
+                        <div className="max-h-[90vh] overflow-y-auto rounded-2xl space-y-4">
+                            <PasswordResetSection />
+                            <MfaRecoveryCodeSection />
+                        </div>
                     </div>
                 </div>
             )}

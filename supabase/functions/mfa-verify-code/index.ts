@@ -59,6 +59,49 @@ async function recentFailures(admin: SupabaseClient, userId: string): Promise<{ 
 
 const secondsUntil = (ms: number) => Math.max(1, Math.ceil((ms - Date.now()) / 1000));
 
+// Session id of the caller's access token. Only read after getUser() has validated the token.
+function sessionIdFrom(authHeader: string): string | null {
+  const payload = authHeader.replace(/^Bearer\s+/i, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return typeof claims.session_id === "string" ? claims.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Records that this auth session passed MFA, so the database lets it read data.
+async function markSessionVerified(
+  admin: SupabaseClient,
+  authHeader: string,
+  userId: string,
+  method: "code" | "trusted_device" | "recovery",
+): Promise<boolean> {
+  const { data, error } = await admin.rpc("mfa_mark_session_verified", {
+    p_session_id: sessionIdFrom(authHeader),
+    p_user_id: userId,
+    p_method: method,
+  });
+  if (error) console.error("Could not record verified session", error);
+  return !error && data === true;
+}
+
+async function rememberThisDevice(admin: SupabaseClient, userId: string, userAgent: string | null): Promise<string> {
+  const deviceToken = randomToken();
+  await admin.from("trusted_devices").insert({
+    user_id: userId,
+    token_hash: await sha256Hex(deviceToken),
+    user_agent: userAgent,
+    expires_at: new Date(Date.now() + DEVICE_TTL_MS).toISOString(),
+  });
+  return deviceToken;
+}
+
+// Recovery codes are shown as XXXXX-XXXXX; accept any case, spaces or dashes.
+const normalizeRecoveryCode = (raw: string) => raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -75,12 +118,43 @@ Deno.serve(async (req: Request) => {
     }
     const user = userData.user;
 
-    const { code, rememberDevice } = await req.json().catch(() => ({}));
+    const { code, recoveryCode, rememberDevice } = await req.json().catch(() => ({}));
+    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const userAgent = req.headers.get("User-Agent") ?? null;
+
+    // A one-time recovery code from the school office replaces the emailed code (e.g. the
+    // email budget ran out or the inbox is unreachable). It works even while email-code
+    // verification is locked; each code has its own 5-attempt limit and 24-hour expiry.
+    if (typeof recoveryCode === "string" && recoveryCode.trim()) {
+      const normalized = normalizeRecoveryCode(recoveryCode);
+      if (normalized.length !== 10) {
+        return json({ error: "Recovery codes look like ABCDE-FGH23." }, 400);
+      }
+      const { data: consumed, error: consumeError } = await admin.rpc("mfa_consume_recovery_code", {
+        p_user_id: user.id,
+        p_code_hash: await sha256Hex(normalized),
+      });
+      if (consumeError) {
+        console.error(consumeError);
+        return json({ error: "Could not check the recovery code. Please try again." }, 500);
+      }
+      if (consumed !== true) {
+        return json({ error: "Invalid or expired recovery code." }, 400);
+      }
+      await admin.from("audit_log").insert({
+        actor_id: user.id,
+        action: "mfa_recovery_code_used",
+        target_user_id: user.id,
+        details: {},
+      });
+      const sessionRecorded = await markSessionVerified(admin, authHeader, user.id, "recovery");
+      const deviceToken = rememberDevice ? await rememberThisDevice(admin, user.id, userAgent) : null;
+      return json({ success: true, deviceToken, sessionRecorded });
+    }
+
     if (!code || typeof code !== "string") {
       return json({ error: "Code is required" }, 400);
     }
-
-    const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
     const before = await recentFailures(admin, user.id);
     if (before.count >= LOCK_FAILURES) {
@@ -145,19 +219,10 @@ Deno.serve(async (req: Request) => {
       return json({ error: "Code expired. Please request a new one." }, 400);
     }
 
-    let deviceToken: string | null = null;
-    if (rememberDevice) {
-      deviceToken = randomToken();
-      const tokenHash = await sha256Hex(deviceToken);
-      await admin.from("trusted_devices").insert({
-        user_id: user.id,
-        token_hash: tokenHash,
-        user_agent: req.headers.get("User-Agent") ?? null,
-        expires_at: new Date(Date.now() + DEVICE_TTL_MS).toISOString(),
-      });
-    }
+    const sessionRecorded = await markSessionVerified(admin, authHeader, user.id, "code");
+    const deviceToken = rememberDevice ? await rememberThisDevice(admin, user.id, userAgent) : null;
 
-    return json({ success: true, deviceToken });
+    return json({ success: true, deviceToken, sessionRecorded });
   } catch (err) {
     console.error(err);
     return json({ error: "Unexpected error" }, 500);

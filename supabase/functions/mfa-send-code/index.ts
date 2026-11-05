@@ -5,7 +5,9 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 //   checkOnly: only report { trusted } — never creates a code or sends email (used on page refresh).
 //   default:   reuse an unexpired unconsumed code (no email) or create + email a new one.
 //   resend:    always create + email a new one, subject to the cooldown and the cap.
-// Email is the scarcest free resource (Resend: 100/day), hence the reuse, cooldown and cap.
+// Email is the scarcest free resource (Resend: 100/day), hence the reuse, cooldown, cap
+// and the daily budget (email_budget_consume). A trusted device records the session as
+// MFA-verified (mfa_mark_session_verified), which is what the database's RLS checks.
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -65,6 +67,35 @@ async function lockedUntil(admin: SupabaseClient, userId: string): Promise<numbe
 
 const secondsUntil = (ms: number) => Math.max(1, Math.ceil((ms - Date.now()) / 1000));
 
+// Session id of the caller's access token. Only read after getUser() has validated the token.
+function sessionIdFrom(authHeader: string): string | null {
+  const payload = authHeader.replace(/^Bearer\s+/i, "").split(".")[1];
+  if (!payload) return null;
+  try {
+    const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4)));
+    return typeof claims.session_id === "string" ? claims.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Records that this auth session passed MFA, so the database lets it read data.
+async function markSessionVerified(
+  admin: SupabaseClient,
+  authHeader: string,
+  userId: string,
+  method: "code" | "trusted_device" | "recovery",
+): Promise<boolean> {
+  const { data, error } = await admin.rpc("mfa_mark_session_verified", {
+    p_session_id: sessionIdFrom(authHeader),
+    p_user_id: userId,
+    p_method: method,
+  });
+  if (error) console.error("Could not record verified session", error);
+  return !error && data === true;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders() });
@@ -103,7 +134,8 @@ Deno.serve(async (req: Request) => {
           .from("trusted_devices")
           .update({ last_used_at: new Date().toISOString() })
           .eq("id", trusted.id);
-        return json({ trusted: true });
+        const sessionRecorded = await markSessionVerified(admin, authHeader, user.id, "trusted_device");
+        return json({ trusted: true, sessionRecorded });
       }
     }
 
@@ -152,6 +184,16 @@ Deno.serve(async (req: Request) => {
         error: `Too many codes requested. Please try again in ${Math.ceil(retryAfterSeconds / 60)} minute(s).`,
         retryAfterSeconds,
       }, 429);
+    }
+
+    // Daily budget (private.security_settings): 60 of Resend's 100 free emails/day for MFA codes.
+    const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "mfa" });
+    if (budgetError) console.error("Email budget check failed", budgetError);
+    if (withinBudget !== true) {
+      return json({
+        error: "Verification email is temporarily unavailable. Please contact the school office.",
+        budgetExhausted: true,
+      }, 503);
     }
 
     const code = generateCode();

@@ -32,6 +32,8 @@ export function MfaVerifyScreen({
     const [ownRememberDevice, setOwnRememberDevice] = useState(false);
     const rememberDevice = showOwnRememberCheckbox ? ownRememberDevice : (controlledRememberDevice ?? false);
     const [mfaCode, setMfaCode] = useState("");
+    // Recovery mode: a one-time code from the school office replaces the emailed code.
+    const [useRecoveryCode, setUseRecoveryCode] = useState(false);
     const [mfaError, setMfaError] = useState("");
     const [isVerifying, setIsVerifying] = useState(false);
     const [isResending, setIsResending] = useState(false);
@@ -85,7 +87,7 @@ export function MfaVerifyScreen({
         setMfaError("");
         setIsVerifying(true);
         try {
-            const result = await verifyMfaCode(userId, mfaCode, rememberDevice);
+            const result = await verifyMfaCode(userId, mfaCode, rememberDevice, useRecoveryCode ? "recovery" : "email");
             if (!result.success) {
                 setMfaError(result.error || "Incorrect code. Please try again.");
                 return;
@@ -203,28 +205,35 @@ export function MfaVerifyScreen({
                                 Verify Your Identity
                             </h2>
                             <p className="text-[#6b6456] text-sm text-center">
-                                Enter the 6-digit code sent to {userEmail ?? "your email"}.
+                                {useRecoveryCode
+                                    ? "Enter the recovery code given to you by the school office."
+                                    : `Enter the 6-digit code sent to ${userEmail ?? "your email"}.`}
                             </p>
                         </div>
 
                         <form onSubmit={handleVerifyCode} className="space-y-5 text-[#000000]">
                             <div>
                                 <label className="block text-xs font-semibold uppercase tracking-wider text-[#1a2b4a] mb-2 text-left">
-                                    Verification Code
+                                    {useRecoveryCode ? "Recovery Code" : "Verification Code"}
                                 </label>
                                 <div className="relative">
                                     <ShieldCheck className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "#8b8476" }} />
                                     <input
+                                        key={useRecoveryCode ? "recovery" : "email"}
                                         type="text"
-                                        inputMode="numeric"
-                                        autoComplete="one-time-code"
-                                        maxLength={6}
+                                        inputMode={useRecoveryCode ? "text" : "numeric"}
+                                        autoComplete={useRecoveryCode ? "off" : "one-time-code"}
+                                        maxLength={useRecoveryCode ? 11 : 6}
                                         value={mfaCode}
                                         onChange={(e) => {
-                                            setMfaCode(e.target.value.replace(/\D/g, ""));
+                                            setMfaCode(
+                                                useRecoveryCode
+                                                    ? e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "")
+                                                    : e.target.value.replace(/\D/g, ""),
+                                            );
                                             setMfaError("");
                                         }}
-                                        placeholder="Enter 6-digit code"
+                                        placeholder={useRecoveryCode ? "XXXXX-XXXXX" : "Enter 6-digit code"}
                                         required
                                         autoFocus
                                         className={`w-full pl-11 pr-4 py-3.5 text-sm tracking-[0.3em] rounded-xl outline-none transition-all bg-white ${
@@ -263,7 +272,10 @@ export function MfaVerifyScreen({
 
                             <button
                                 type="submit"
-                                disabled={isVerifying || mfaCode.length !== 6}
+                                disabled={
+                                    isVerifying ||
+                                    (useRecoveryCode ? mfaCode.replace(/-/g, "").length !== 10 : mfaCode.length !== 6)
+                                }
                                 className="w-full flex items-center justify-center gap-2 py-4 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.99] mt-2 disabled:opacity-60 disabled:cursor-not-allowed"
                                 style={{ backgroundColor: "#1a2b4a" }}
                             >
@@ -279,19 +291,34 @@ export function MfaVerifyScreen({
                                 >
                                     Back to login
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={handleResendCode}
-                                    disabled={isResending || resendCooldown > 0}
-                                    className="text-[#1a2b4a] font-semibold hover:opacity-70 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {isResending
-                                        ? "Sending..."
-                                        : resendCooldown > 0
-                                          ? `Resend code (${resendCooldown}s)`
-                                          : "Resend code"}
-                                </button>
+                                {!useRecoveryCode && (
+                                    <button
+                                        type="button"
+                                        onClick={handleResendCode}
+                                        disabled={isResending || resendCooldown > 0}
+                                        className="text-[#1a2b4a] font-semibold hover:opacity-70 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {isResending
+                                            ? "Sending..."
+                                            : resendCooldown > 0
+                                              ? `Resend code (${resendCooldown}s)`
+                                              : "Resend code"}
+                                    </button>
+                                )}
                             </div>
+
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setUseRecoveryCode((v) => !v);
+                                    setMfaCode("");
+                                    setMfaError("");
+                                    setResendMessage("");
+                                }}
+                                className="w-full text-center text-xs text-[#6b6456] hover:text-[#1a2b4a] transition-colors"
+                            >
+                                {useRecoveryCode ? "Use the emailed code instead" : "Didn't get an email? Use a recovery code"}
+                            </button>
                         </form>
                     </div>
                 </div>
