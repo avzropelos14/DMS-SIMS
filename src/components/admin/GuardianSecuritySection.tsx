@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../supabase";
 import { PhotoCaptureModal } from "../shared/PhotoCaptureModal";
+import { GuardianActionPage, type GuardianAction } from "./GuardianActionPage";
 import { deletePhoto, getPhotoUrl, photoFileName, safeFolder, uploadPhoto } from "../../lib/photo";
 
 // Guardian Security: pickup-verification photos (Phase 5B) and account security (Phase 5C).
@@ -117,6 +118,7 @@ export function GuardianSecuritySection() {
     const [capture, setCapture] = useState<CaptureTarget | null>(null);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
     const [busy, setBusy] = useState(false);
+    const [action, setAction] = useState<GuardianAction | null>(null);
 
     const fetchPending = () =>
         supabase.rpc("pending_guardian_photos").then(({ data }) => (data ?? []) as PendingPhoto[]);
@@ -225,106 +227,163 @@ export function GuardianSecuritySection() {
         return null;
     };
 
-    const removeGuardianPhoto = async (g: GuardianRow) => {
-        if (!window.confirm(`Delete the pickup photo of ${g.full_name}?`)) return;
-        setBusy(true);
-        const { data, error } = await supabase.rpc("remove_guardian_photo", { p_guardian_id: g.id });
-        setBusy(false);
-        if (error) {
-            flash(false, "Couldn't delete that photo. Please try again.");
-            return;
-        }
-        await deletePhoto(data?.delete_path);
-        flash(true, `Photo deleted for ${g.full_name}.`);
-        void loadRetention();
-        if (selected?.id === g.id) void refreshSelected(g.id);
+    // Opens the confirmation page; on success it closes and shows the result message.
+    const ask = (a: GuardianAction) => {
+        setMessage(null);
+        setAction({
+            ...a,
+            run: async (text) => {
+                const failure = await a.run(text);
+                if (!failure) {
+                    setAction(null);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                }
+                return failure;
+            },
+        });
     };
+
+    const removeGuardianPhoto = (g: GuardianRow) => ask({
+        tone: "danger",
+        title: "Delete pickup photo",
+        subject: g.full_name,
+        intro: "The guardian's pickup photo is deleted permanently from the school's storage.",
+        points: [
+            "Guards will see \"No approved photo\" and must check a government ID at pickup.",
+            "The guardian or the office can add a new photo later.",
+        ],
+        confirmLabel: "Delete photo",
+        run: async () => {
+            const { data, error } = await supabase.rpc("remove_guardian_photo", { p_guardian_id: g.id });
+            if (error) return "Couldn't delete that photo. Please try again.";
+            await deletePhoto(data?.delete_path);
+            flash(true, `Photo deleted for ${g.full_name}.`);
+            void loadRetention();
+            if (selected?.id === g.id) void refreshSelected(g.id);
+            return null;
+        },
+    });
 
     // ─── Phase 5C actions ───
-    const lockdown = async (g: GuardianRow) => {
-        const reason = window.prompt(
-            `LOCK DOWN ${g.full_name}?\n\n` +
-            "This suspends all of their pickup QR codes and replaces them, cancels their temporary QR codes, " +
-            "signs them out on every device and blocks sign-in until an admin restores access after checking them in person.\n\n" +
-            "Reason (e.g. \"Lost phone, reported by parent\"):",
-        );
-        if (reason === null) return;
-        if (!reason.trim()) { flash(false, "A reason is required to lock down an account."); return; }
-        setBusy(true);
-        const { data, error } = await supabase.rpc("lockdown_guardian", { p_guardian_id: g.id, p_reason: reason.trim() });
-        setBusy(false);
-        if (error || data?.error) {
-            flash(false, data?.error === "already_locked" ? `${g.full_name} is already locked down.` : "Couldn't lock down this account. Please try again.");
-            return;
-        }
-        flash(true,
-            `${g.full_name} is locked down: ${data.links_suspended} pickup link(s) suspended, ` +
-            `${data.temporary_qrs_revoked} temporary QR code(s) cancelled, ${data.sessions_ended} session(s) ended.`);
-        void refreshSelected(g.id);
-        void loadIncidents();
-    };
+    const lockdown = (g: GuardianRow) => ask({
+        tone: "danger",
+        title: "Lock down account",
+        subject: `${g.full_name}${g.email ? ` · ${g.email}` : ""}`,
+        intro: "Use this when the guardian lost their phone or the account may be in someone else's hands. It takes effect immediately.",
+        points: [
+            "Every pickup QR code of this guardian is suspended and replaced (old codes and screenshots stop working).",
+            "Their active temporary QR codes are cancelled.",
+            "They are signed out on every device and remembered devices are forgotten.",
+            "Sign-in is blocked until the full admin restores access after checking them in person.",
+            "They must set a new password at their next sign-in.",
+        ],
+        inputLabel: "Reason",
+        placeholder: "e.g. Lost phone, reported by the parent by phone call",
+        confirmLabel: "Lock down now",
+        run: async (reason) => {
+            const { data, error } = await supabase.rpc("lockdown_guardian", { p_guardian_id: g.id, p_reason: reason });
+            if (error || data?.error) {
+                return data?.error === "already_locked" ? `${g.full_name} is already locked down.` : "Couldn't lock down this account. Please try again.";
+            }
+            flash(true,
+                `${g.full_name} is locked down: ${data.links_suspended} pickup link(s) suspended, ` +
+                `${data.temporary_qrs_revoked} temporary QR code(s) cancelled, ${data.sessions_ended} session(s) ended.`);
+            void refreshSelected(g.id);
+            void loadIncidents();
+            return null;
+        },
+    });
 
-    const restore = async (g: GuardianRow) => {
-        const note = window.prompt(
-            `Restore access for ${g.full_name}?\n\nOnly do this after checking the guardian in person with a valid ID. ` +
-            "Their pickup links re-open with NEW QR codes, and they must set a new password when they sign in.\n\n" +
-            "Note (e.g. \"Verified with driver's licence at the office\"):",
-        );
-        if (note === null) return;
-        if (!note.trim()) { flash(false, "A note is required to restore access."); return; }
-        setBusy(true);
-        const { data, error } = await supabase.rpc("restore_guardian_access", { p_guardian_id: g.id, p_note: note.trim() });
-        setBusy(false);
-        if (error || data?.error) {
-            flash(false, error?.code === "42501" ? "Only the full admin can restore access." : "Couldn't restore access. Please try again.");
-            return;
-        }
-        flash(true, `Access restored for ${g.full_name}. They must set a new password at their next sign-in.`);
-        void refreshSelected(g.id);
-        void loadIncidents();
-    };
+    const restore = (g: GuardianRow) => ask({
+        tone: "success",
+        title: "Restore access",
+        subject: `${g.full_name}${g.email ? ` · ${g.email}` : ""}`,
+        intro: "Only restore access after checking the guardian in person with a valid government ID.",
+        points: [
+            "Sign-in is unblocked.",
+            "The pickup links suspended by the lockdown re-open, with the NEW QR codes.",
+            "The guardian must set a new password when they sign in.",
+        ],
+        inputLabel: "How was the guardian verified?",
+        placeholder: "e.g. Verified with driver's licence at the office",
+        confirmLabel: "Restore access",
+        run: async (note) => {
+            const { data, error } = await supabase.rpc("restore_guardian_access", { p_guardian_id: g.id, p_note: note });
+            if (error || data?.error) {
+                return error?.code === "42501" ? "Only the full admin can restore access." : "Couldn't restore access. Please try again.";
+            }
+            flash(true, `Access restored for ${g.full_name}. They must set a new password at their next sign-in.`);
+            void refreshSelected(g.id);
+            void loadIncidents();
+            return null;
+        },
+    });
 
-    const setLinkAccess = async (link: GuardianLink, name: string, status: "active" | "suspended") => {
-        const question = status === "suspended"
-            ? `Suspend pickup of ${name} for this guardian? Their QR code for ${name} stops working until re-activated.`
-            : `Re-activate pickup of ${name} for this guardian?`;
-        if (!window.confirm(question)) return;
-        setBusy(true);
-        const { data, error } = await supabase.rpc("set_guardian_link_access", { p_link_id: link.id, p_status: status });
-        setBusy(false);
-        if (error || data?.error) {
-            flash(false, data?.error === "guardian_locked"
-                ? "This guardian is locked down. Restore access first."
-                : "Couldn't change pickup access. Please try again.");
-            return;
-        }
-        flash(true, status === "suspended" ? `Pickup of ${name} suspended.` : `Pickup of ${name} re-activated.`);
-        if (selected) void refreshSelected(selected.id);
-    };
+    const setLinkAccess = (link: GuardianLink, name: string, status: "active" | "suspended") => ask({
+        tone: status === "suspended" ? "danger" : "success",
+        title: status === "suspended" ? "Suspend pickup" : "Re-activate pickup",
+        subject: `${name} · ${selected?.full_name ?? ""}`,
+        intro: status === "suspended"
+            ? `This guardian's QR code for ${name} stops working until the office re-activates it.`
+            : `This guardian's QR code for ${name} works again at the gate.`,
+        points: status === "suspended"
+            ? ["The parent sees a \"pickup suspended\" notice in their portal.", "Guards see \"suspended\" when the code is scanned."]
+            : [],
+        confirmLabel: status === "suspended" ? "Suspend pickup" : "Re-activate pickup",
+        run: async () => {
+            const { data, error } = await supabase.rpc("set_guardian_link_access", { p_link_id: link.id, p_status: status });
+            if (error || data?.error) {
+                return data?.error === "guardian_locked"
+                    ? "This guardian is locked down. Restore access first."
+                    : "Couldn't change pickup access. Please try again.";
+            }
+            flash(true, status === "suspended" ? `Pickup of ${name} suspended.` : `Pickup of ${name} re-activated.`);
+            if (selected) void refreshSelected(selected.id);
+            return null;
+        },
+    });
 
-    const rotateQr = async (link: GuardianLink, name: string) => {
-        if (!window.confirm(`Replace the pickup QR code for ${name}? The current code (and any screenshot of it) stops working at once; the parent sees the new one in their portal.`)) return;
-        setBusy(true);
-        const { error } = await supabase.rpc("rotate_guardian_link_qr", { p_link_id: link.id });
-        setBusy(false);
-        if (error) { flash(false, "Couldn't replace the QR code. Please try again."); return; }
-        flash(true, `New QR code issued for ${name}.`);
-        if (selected) void loadSecurity(selected.id);
-    };
+    const rotateQr = (link: GuardianLink, name: string) => ask({
+        tone: "normal",
+        title: "Issue a new QR code",
+        subject: `${name} · ${selected?.full_name ?? ""}`,
+        intro: "Use this if the QR code may have been shared, copied or photographed.",
+        points: [
+            "The current code (and any screenshot of it) stops working at once.",
+            "The parent sees the new code in their portal the next time it loads.",
+        ],
+        confirmLabel: "Issue new QR code",
+        run: async () => {
+            const { error } = await supabase.rpc("rotate_guardian_link_qr", { p_link_id: link.id });
+            if (error) return "Couldn't replace the QR code. Please try again.";
+            flash(true, `New QR code issued for ${name}.`);
+            if (selected) void loadSecurity(selected.id);
+            return null;
+        },
+    });
 
-    const allowSecondPickup = async (studentId: string, name: string) => {
-        const reason = window.prompt(
-            `Allow ONE more pickup of ${name} today?\n\nUse this when the student was already picked up but must be picked up again (e.g. came back for an activity).\n\nReason:`,
-        );
-        if (reason === null) return;
-        if (!reason.trim()) { flash(false, "A reason is required."); return; }
-        setBusy(true);
-        const { error } = await supabase.rpc("grant_pickup_override", { p_student_id: studentId, p_reason: reason.trim() });
-        setBusy(false);
-        if (error) { flash(false, "Couldn't allow the extra pickup. Please try again."); return; }
-        flash(true, `One more pickup of ${name} is allowed today.`);
-        void loadOverrides();
-    };
+    const allowSecondPickup = (studentId: string, name: string) => ask({
+        tone: "normal",
+        title: "Allow another pickup today",
+        subject: name,
+        intro: "A student can normally be picked up only once per day. This allows ONE more pickup today, e.g. when the student came back for an activity.",
+        points: [
+            "Works for one more scan today only, then the normal rule applies again.",
+            "Shown under \"Extra pickups allowed today\".",
+        ],
+        inputLabel: "Reason",
+        placeholder: "e.g. Returned to school for the afternoon program",
+        confirmLabel: "Allow one more pickup",
+        run: async (reason) => {
+            const { error } = await supabase.rpc("grant_pickup_override", { p_student_id: studentId, p_reason: reason });
+            if (error) return "Couldn't allow the extra pickup. Please try again.";
+            flash(true, `One more pickup of ${name} is allowed today.`);
+            void loadOverrides();
+            return null;
+        },
+    });
+
+    if (action) return <GuardianActionPage action={action} onCancel={() => setAction(null)} />;
 
     const status = selected && security?.id === selected.id ? security.status : null;
 
