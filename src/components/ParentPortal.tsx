@@ -7,6 +7,8 @@ import { fetchAssignedTeacherMap } from '../lib/schedule';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES, getTuitionForGrade, useTuitionBreakdown } from '../lib/tuition';
 import schoolLogo from './assets/dmgteLogo.jpg';
 import { QRCodeCanvas } from 'qrcode.react';
+import { PhotoCaptureModal } from './shared/PhotoCaptureModal';
+import { photoFileName, uploadPhoto } from '../lib/photo';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
@@ -353,6 +355,7 @@ function NoticeOfAccessModal({ onAcknowledge }: { onAcknowledge: () => void }) {
           <div>
             <h3 className="font-semibold text-[#1a2b4a] mb-1">4. Student Pickup Authorization</h3>
             <p className="text-[#6b6456]">Only individuals authorized through this portal's Student Pickup feature, or otherwise designated in writing to the school, may pick up your child from campus.</p>
+            <p className="text-[#6b6456] mt-2">To confirm identities at pickup, the school may keep a photo of you and of your child. These photos are stored privately, shown only to school guards and the school office, used only for pickup verification, and deleted once none of your children is enrolled (Data Privacy Act of 2012).</p>
           </div>
           <div>
             <h3 className="font-semibold text-[#1a2b4a] mb-1">5. Acceptable Use</h3>
@@ -1081,6 +1084,75 @@ function ScheduleViewing({ children, selectedChild, setSelectedChild }: any) {
 }
 
 // Student Pickup
+// The parent's own pickup-verification photo (Phase 5B). A new photo waits for the school
+// office's approval; until then the guard sees the previous approved photo, if any.
+function MyPickupPhotoCard({ guardianId }: { guardianId: string }) {
+  const [status, setStatus] = useState<{ approved: boolean; pending_since: string | null } | null>(null);
+  const [showCapture, setShowCapture] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  const loadStatus = async () => {
+    const { data } = await supabase.rpc('my_guardian_photo_status');
+    if (data) setStatus(data as { approved: boolean; pending_since: string | null });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase.rpc('my_guardian_photo_status').then(({ data }) => {
+      if (!cancelled && data) setStatus(data as { approved: boolean; pending_since: string | null });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const submit = async (blob: Blob): Promise<string | null> => {
+    const path = `pending/${guardianId}/${photoFileName()}`;
+    const uploadError = await uploadPhoto(path, blob);
+    if (uploadError) return `Upload failed: ${uploadError}`;
+    const { error } = await supabase.rpc('submit_my_guardian_photo', { p_path: path });
+    if (error) return "Couldn't submit the photo. Please try again.";
+    setShowCapture(false);
+    setNotice('Thank you. The school office will review your photo.');
+    void loadStatus();
+    return null;
+  };
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-wrap items-center gap-4">
+      <div className="w-12 h-12 rounded-full bg-[#1a2b4a]/10 flex items-center justify-center shrink-0">
+        <User className="w-6 h-6 text-[#1a2b4a]" />
+      </div>
+      <div className="flex-1 min-w-[200px]">
+        <p className="font-semibold text-[#1a2b4a]">My pickup photo</p>
+        <p className="text-sm text-[#6b6456]">
+          {status === null
+            ? 'Checking…'
+            : status.pending_since
+              ? 'A new photo is waiting for the school office to approve it.'
+              : status.approved
+                ? 'Approved. Guards compare it with you at pickup.'
+                : 'No photo yet. Guards will check your ID at pickup until you add one.'}
+        </p>
+        {notice && <p className="text-xs text-green-700 mt-1">{notice}</p>}
+      </div>
+      <button
+        onClick={() => { setNotice(''); setShowCapture(true); }}
+        className="px-4 py-2.5 min-h-11 rounded-lg border-2 border-[#1a2b4a] text-[#1a2b4a] text-sm font-medium hover:bg-[#faf8f5]"
+      >
+        {status?.approved || status?.pending_since ? 'Update photo' : 'Add photo'}
+      </button>
+      {showCapture && (
+        <PhotoCaptureModal
+          title="My pickup photo"
+          facingMode="user"
+          note="Your photo is used only to confirm your identity when picking up your child. It is visible only to school guards and the school office, and is deleted once none of your children is enrolled. By saving, you consent to this use."
+          onSave={submit}
+          onClose={() => setShowCapture(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function StudentPickup({ user, children }: any) {
   const [showTempForm, setShowTempForm] = useState(false);
   const [selectedChild, setSelectedChild] = useState('');
@@ -1215,6 +1287,8 @@ function StudentPickup({ user, children }: any) {
         <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Student Pickup QR Code</h1>
         <p className="text-[#6b6456]">Show this QR code to the security guard during pickup</p>
       </div>
+
+      <MyPickupPhotoCard guardianId={user.id} />
 
       {/* Child Selection Filter */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

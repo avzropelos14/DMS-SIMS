@@ -7,6 +7,7 @@ import {
   User, Search, ArrowLeft, AlertCircle, Scan, KeyRound
 } from 'lucide-react';
 import { ChangePasswordModal } from './shared/ChangePasswordModal';
+import { getPhotoUrl } from '../lib/photo';
 
 // Pickup QR codes (v2) hold only a secret: {"v":2,"s":"..."}. The guard's scan is sent as-is
 // to verify_pickup_qr(), which looks up the student and guardian; nothing is recorded until
@@ -23,6 +24,36 @@ interface PickupQrInfo {
   relationship?: string | null;
   previous_pickup_at?: string | null;
   previous_pickup_by?: string | null;
+  guardian_photo_path?: string | null; // approved photo only; never set for temporary QRs
+  student_photo_path?: string | null;
+}
+
+// A pickup photo, fetched once per day through a 60-second signed URL (lib/photo.ts).
+function PickupPhoto({ path, label }: { path: string | null | undefined; label: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(!!path);
+  useEffect(() => {
+    let cancelled = false;
+    if (!path) return;
+    getPhotoUrl(path).then((u) => {
+      if (cancelled) return;
+      setUrl(u);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [path]);
+  return (
+    <div className="text-center">
+      <div className="aspect-square w-full rounded-2xl bg-white border-2 border-[#eae7e0] overflow-hidden flex items-center justify-center">
+        {url ? (
+          <img src={url} alt={label} className="w-full h-full object-cover" />
+        ) : (
+          <div className="text-xs text-[#8b8476] px-2">{loading ? 'Loading photo…' : 'No photo on file'}</div>
+        )}
+      </div>
+      <div className="text-xs text-[#6b6456] mt-1">{label}</div>
+    </div>
+  );
 }
 
 // Rows returned by the guard_pickup_history() database function.
@@ -561,6 +592,13 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                     )}
 
                     <div className="bg-[#faf8f5] rounded-2xl p-6 border border-[#eae7e0] space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <PickupPhoto
+                          path={info.guardian_photo_path}
+                          label={info.kind === 'temporary' ? 'Temporary pickup (no photo)' : 'Guardian'}
+                        />
+                        <PickupPhoto path={info.student_photo_path} label="Student" />
+                      </div>
                       <div>
                         <div className="text-xs text-[#6b6456] mb-1">
                           {info.kind === 'temporary' ? 'Temporary pickup person' : 'Parent/Guardian'}
@@ -573,9 +611,11 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                         <div className="text-lg font-bold text-[#1a2b4a]">{info.student_name}</div>
                         <div className="text-sm text-[#6b6456]">{info.grade_level} · {info.student_id}</div>
                       </div>
-                      <p className="text-xs text-[#6b6456] pt-2 border-t border-[#eae7e0]">
-                        Photos are not on file yet: verify with a government ID and notify the office if anything doesn't match.
-                      </p>
+                      {!info.guardian_photo_path && (
+                        <p className="text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                          No approved photo: verify with a government ID and notify the office.
+                        </p>
+                      )}
                     </div>
 
                     {scanError && (
