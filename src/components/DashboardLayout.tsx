@@ -34,6 +34,8 @@ interface DashboardLayoutProps {
   // sees years they were actually enrolled in (a new student has no prior years to show;
   // a continuing student sees back to whichever year they first enrolled).
   availableYears?: string[];
+  // Extra controls at the right of the header, before the school year (e.g. the parent bell).
+  headerExtra?: ReactNode;
 }
 
 // NOTE: your real project imports the school logo like this:
@@ -54,7 +56,8 @@ export function DashboardLayout({
   onLogout,
   schoolYear,
   onSchoolYearChange,
-  availableYears
+  availableYears,
+  headerExtra
 }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -173,6 +176,7 @@ export function DashboardLayout({
 
           {/* Right Section */}
           <div className="flex items-center gap-2">
+            {headerExtra}
 
             {/* School Year Selector */}
             {onSchoolYearChange && (

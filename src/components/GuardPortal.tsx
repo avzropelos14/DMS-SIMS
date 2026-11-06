@@ -245,10 +245,14 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
     if (!pendingScan) return;
     setActionBusy(true);
     try {
-      const { error } = await supabase.rpc('reject_pickup', { p_qr: pendingScan.qr, p_reason: rejectReason.trim() });
+      const { data, error } = await supabase.rpc('reject_pickup', { p_qr: pendingScan.qr, p_reason: rejectReason.trim() });
       if (error) {
         setScanError('Could not send the report. Please tell the school office directly.');
         return;
+      }
+      // Email the QR owner in the background (the parents' in-app notice is already saved).
+      if (data?.audit_id) {
+        void supabase.functions.invoke('notify-pickup-rejected', { body: { audit_id: data.audit_id } });
       }
       setPendingScan(null);
       setRejecting(false);

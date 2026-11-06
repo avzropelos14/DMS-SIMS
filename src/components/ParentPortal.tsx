@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
+import { NotificationBell } from './shared/NotificationBell';
 import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
@@ -196,6 +197,7 @@ export function ParentPortal({ user, onLogout }: ParentPortalProps) {
           onSchoolYearChange={setSchoolYear}
           onProfileClick={() => setActiveView('profile')}
           availableYears={availableYears}
+          headerExtra={<NotificationBell />}
         >
           {activeView === 'schoolPolicy' && <SchoolPolicyPage onBack={() => setActiveView('overview')} />}
           {activeView !== 'schoolPolicy' && childrenLoading && (
