@@ -16,12 +16,12 @@ import {
   Mail, User, Trash2, Phone, Briefcase, FileText, ArrowLeft, LogOut
 } from 'lucide-react';
 
-// The Guard portal's scanner decodes and parses this exact shape (see GuardPortal.tsx).
-// Content is the guardian name, guardian relationship, and student name (plus the IDs
-// needed to verify those names actually match a real, currently-linked record).
-type PickupQRPayload =
-  | { type: 'permanent'; guardianId: string; guardianName: string; relationship: string; studentId: string; studentName: string }
-  | { type: 'temporary'; authId: string; guardianName: string; relationship: string; studentId: string; studentName: string };
+// Pickup QR content (v2): only a random secret. The Guard portal sends it to the database
+// (verify_pickup_qr), which looks up the student and guardian; no names or IDs are in the
+// code, so it can't be forged, and the office can cancel it by rotating the secret.
+// Permanent codes use the guardian-student link's secret (my_pickup_qr_codes()); temporary
+// codes use the authorization's qr_token.
+const pickupQrValue = (secret: string) => JSON.stringify({ v: 2, s: secret });
 
 interface ParentPortalProps {
   user: any;
@@ -1085,6 +1085,9 @@ function StudentPickup({ user, children }: any) {
   const [showTempForm, setShowTempForm] = useState(false);
   const [selectedChild, setSelectedChild] = useState('');
   const [tempGuardians, setTempGuardians] = useState<any[]>([]);
+  // Permanent QR secrets per child (null secret = suspended or pickup not allowed).
+  const [qrCodes, setQrCodes] = useState<Record<string, { secret: string | null; accessStatus: string }>>({});
+  const [qrCodesLoaded, setQrCodesLoaded] = useState(false);
   const [guardianName, setGuardianName] = useState('');
   const [relationship, setRelationship] = useState('');
   const [phone, setPhone] = useState('');
@@ -1102,7 +1105,7 @@ function StudentPickup({ user, children }: any) {
     if (childIds.length === 0) return;
     const { data, error } = await supabase
       .from('pickup_authorizations')
-      .select('id, student_id, guardian_name, relationship, phone, valid_until, status, created_at')
+      .select('id, student_id, guardian_name, relationship, phone, qr_token, valid_until, status, created_at')
       .in('student_id', childIds)
       .order('created_at', { ascending: false });
     if (error) {
@@ -1116,6 +1119,7 @@ function StudentPickup({ user, children }: any) {
         name: row.guardian_name,
         relationship: row.relationship,
         phone: row.phone,
+        qrToken: row.qr_token,
         validUntil: new Date(row.valid_until),
         status: row.status,
         createdAt: new Date(row.created_at),
@@ -1127,6 +1131,20 @@ function StudentPickup({ user, children }: any) {
     loadTempGuardians();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [children.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase.rpc('my_pickup_qr_codes').then(({ data, error }) => {
+      if (cancelled) return;
+      if (error) console.error('Failed to load pickup QR codes', error);
+      const rows = (data ?? []) as { student_id: string; secret: string | null; access_status: string }[];
+      setQrCodes(Object.fromEntries(rows.map((r) => [r.student_id, { secret: r.secret, accessStatus: r.access_status }])));
+      setQrCodesLoaded(true);
+    });
+    return () => { cancelled = true; };
+  }, [children.length]);
+
+  const childQr = childInfo ? qrCodes[childInfo.id] : undefined;
 
   const handleGenerateTempQR = async () => {
     if (!guardianName || !relationship || !phone || !selectedChild) return;
@@ -1262,25 +1280,38 @@ function StudentPickup({ user, children }: any) {
           </div>
 
           <div className="p-8">
-            {/* Real, scannable QR code — content is the guardian name, guardian
-                relationship, and student name (plus IDs the Guard portal verifies
-                against student_guardians before treating a scan as valid). */}
-            <div className="bg-white border-4 border-[#1a2b4a] rounded-2xl p-6 mb-6 flex items-center justify-center">
-              <QRCodeCanvas
-                id="permanent-qr-canvas"
-                value={JSON.stringify({
-                  type: 'permanent',
-                  guardianId: user.id,
-                  guardianName: user.name,
-                  relationship: childInfo.relationship || 'Guardian',
-                  studentId: childInfo.id,
-                  studentName: childInfo.name,
-                } satisfies PickupQRPayload)}
-                size={220}
-                level="M"
-                includeMargin
-              />
+            {/* Scannable QR holding only this link's secret (see pickupQrValue). */}
+            <div className="bg-white border-4 border-[#1a2b4a] rounded-2xl p-6 mb-3 flex items-center justify-center min-h-[268px]">
+              {childQr?.secret ? (
+                <QRCodeCanvas
+                  id="permanent-qr-canvas"
+                  value={pickupQrValue(childQr.secret)}
+                  size={220}
+                  level="M"
+                  includeMargin
+                />
+              ) : (
+                <div className="text-center text-sm px-4">
+                  {!qrCodesLoaded ? (
+                    <p className="text-[#6b6456]">Loading your pickup QR code…</p>
+                  ) : childQr?.accessStatus === 'suspended' ? (
+                    <>
+                      <AlertCircle className="w-8 h-8 text-red-600 mx-auto mb-2" />
+                      <p className="font-semibold text-red-700">Pickup access is suspended</p>
+                      <p className="text-[#6b6456] mt-1">Please contact the school office.</p>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-8 h-8 text-[#8b8476] mx-auto mb-2" />
+                      <p className="text-[#6b6456]">No pickup QR code is available for this child. Please contact the school office.</p>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
+            <p className="text-xs text-center text-[#6b6456] mb-6">
+              Lost your phone or think someone copied this code? Contact the school office right away so they can cancel it.
+            </p>
 
             {/* Parent Information */}
             <div className="space-y-3 bg-[#faf8f5] rounded-xl p-4 border border-gray-200">
@@ -1298,15 +1329,23 @@ function StudentPickup({ user, children }: any) {
               </div>
               <div>
                 <div className="text-xs text-[#6b6456] mb-1">Status</div>
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
-                  <CheckCircle className="w-3 h-3" />
-                  Always Valid
-                </span>
+                {childQr?.accessStatus === 'suspended' ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-semibold">
+                    <AlertCircle className="w-3 h-3" />
+                    Suspended
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-semibold">
+                    <CheckCircle className="w-3 h-3" />
+                    Valid until cancelled by the office
+                  </span>
+                )}
               </div>
             </div>
 
             <div className="mt-6 flex gap-3">
               <button
+                disabled={!childQr?.secret}
                 onClick={() => {
                   const canvas = document.getElementById('permanent-qr-canvas') as HTMLCanvasElement | null;
                   if (!canvas) return;
@@ -1315,7 +1354,7 @@ function StudentPickup({ user, children }: any) {
                   link.href = canvas.toDataURL('image/png');
                   link.click();
                 }}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-[#1a2b4a] text-white rounded-lg hover:bg-[#2d4263] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Download className="w-4 h-4" />
                 <span className="text-sm font-medium">Download</span>
@@ -1593,14 +1632,7 @@ function StudentPickup({ user, children }: any) {
             <div className="flex items-center justify-center bg-white border-4 border-[#7d1935] rounded-2xl p-6">
               <QRCodeCanvas
                 id="temp-qr-canvas"
-                value={JSON.stringify({
-                  type: 'temporary',
-                  authId: viewingQr.id,
-                  guardianName: viewingQr.name,
-                  relationship: viewingQr.relationship,
-                  studentId: viewingQr.studentId,
-                  studentName: (children.find((c: any) => c.id === viewingQr.studentId) || {}).name || '',
-                } satisfies PickupQRPayload)}
+                value={pickupQrValue(viewingQr.qrToken)}
                 size={200}
                 level="M"
                 includeMargin
