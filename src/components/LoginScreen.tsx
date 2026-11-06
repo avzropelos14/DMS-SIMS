@@ -66,6 +66,11 @@ export function LoginScreen({ onAuthenticated, initialError = "" }: LoginScreenP
                 password,
             });
 
+            if (signInError?.code === "user_banned") {
+                // Locked down by the school (Guardian Security), e.g. after a lost phone.
+                setError("This account is locked for security. Please visit or call the school office to restore access.");
+                return;
+            }
             if (signInError || !data.user) {
                 setError("Invalid email or password. Please try again.");
                 return;

@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, Camera, CheckCircle, Search, ShieldCheck, Trash2, User, XCircle } from "lucide-react";
+import {
+    AlertCircle, AlertTriangle, Camera, CheckCircle, Lock, PauseCircle, PlayCircle, QrCode,
+    Search, ShieldCheck, Trash2, Unlock, User, XCircle, CalendarPlus,
+} from "lucide-react";
 import { supabase } from "../../supabase";
 import { PhotoCaptureModal } from "../shared/PhotoCaptureModal";
 import { deletePhoto, getPhotoUrl, photoFileName, safeFolder, uploadPhoto } from "../../lib/photo";
 
-// Guardian Security (Phase 5B): pickup-verification photos. The office approves photos
-// parents submit, takes photos at the desk, and removes photos it no longer needs to keep
-// (Data Privacy Act: delete a guardian's photo once none of their children is enrolled).
-// Phase 5C adds suspension, QR cancellation and lockdown to this page.
+// Guardian Security: pickup-verification photos (Phase 5B) and account security (Phase 5C).
+// The office approves photos parents submit, takes photos at the desk, removes photos it no
+// longer needs to keep (Data Privacy Act), locks down a guardian whose phone or account may be
+// compromised, suspends or replaces single pickup QR codes, and allows a second pickup today.
 
 interface LinkedStudent {
     id: string;
@@ -18,6 +21,13 @@ interface LinkedStudent {
     photo_path: string | null;
 }
 
+interface GuardianLink {
+    id: string;
+    relationship: string | null;
+    access_status: string;
+    students: LinkedStudent | null;
+}
+
 interface GuardianRow {
     id: string;
     full_name: string;
@@ -25,7 +35,7 @@ interface GuardianRow {
     phone: string | null;
     photo_path: string | null;
     photo_status: string;
-    student_guardians: { relationship: string | null; access_status: string; students: LinkedStudent | null }[];
+    student_guardians: GuardianLink[];
 }
 
 interface PendingPhoto {
@@ -37,8 +47,32 @@ interface PendingPhoto {
     current_photo_path: string | null;
 }
 
+interface SecurityStatus {
+    locked: boolean;
+    incident_reason: string | null;
+    incident_opened_at: string | null;
+    must_change_password: boolean;
+    active_temporary_qrs: number;
+    qr_rotated_at: Record<string, string>;
+}
+
+interface OpenIncident {
+    guardian_id: string;
+    full_name: string;
+    email: string | null;
+    reason: string;
+    opened_at: string;
+}
+
+interface PickupOverride {
+    student_id: string;
+    student_name: string;
+    granted_at: string;
+    used_at: string | null;
+}
+
 const GUARDIAN_SELECT =
-    "id, full_name, email, phone, photo_path, photo_status, student_guardians(relationship, access_status, students(id, first_name, last_name, grade_level, status, photo_path))";
+    "id, full_name, email, phone, photo_path, photo_status, student_guardians(id, relationship, access_status, students(id, first_name, last_name, grade_level, status, photo_path))";
 
 function PhotoThumb({ path, size = "w-20 h-20" }: { path: string | null | undefined; size?: string }) {
     // Remembers which path the loaded URL belongs to, so a changed path never shows a stale photo.
@@ -59,12 +93,26 @@ function PhotoThumb({ path, size = "w-20 h-20" }: { path: string | null | undefi
 
 type CaptureTarget = { kind: "guardian"; id: string; name: string } | { kind: "student"; id: string; name: string };
 
+// Pending photos a parent replaced before review: delete the files, then clear the queue.
+async function cleanUpReplacedPhotos() {
+    const { data } = await supabase.rpc("photo_cleanup_list");
+    const paths = (data ?? []) as string[];
+    if (paths.length === 0) return;
+    for (const p of paths) await deletePhoto(p);
+    await supabase.rpc("photo_cleanup_done", { p_paths: paths });
+}
+
+const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "");
+
 export function GuardianSecuritySection() {
     const [pending, setPending] = useState<PendingPhoto[]>([]);
     const [query, setQuery] = useState("");
     const [results, setResults] = useState<GuardianRow[]>([]);
     const [searched, setSearched] = useState(false);
     const [selected, setSelected] = useState<GuardianRow | null>(null);
+    const [security, setSecurity] = useState<{ id: string; status: SecurityStatus } | null>(null);
+    const [incidents, setIncidents] = useState<OpenIncident[]>([]);
+    const [overrides, setOverrides] = useState<PickupOverride[]>([]);
     const [retention, setRetention] = useState<GuardianRow[]>([]);
     const [capture, setCapture] = useState<CaptureTarget | null>(null);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -72,6 +120,10 @@ export function GuardianSecuritySection() {
 
     const fetchPending = () =>
         supabase.rpc("pending_guardian_photos").then(({ data }) => (data ?? []) as PendingPhoto[]);
+    const fetchIncidents = () =>
+        supabase.rpc("security_incidents_open").then(({ data }) => (data ?? []) as OpenIncident[]);
+    const fetchOverrides = () =>
+        supabase.rpc("pickup_overrides_today").then(({ data }) => (data ?? []) as PickupOverride[]);
 
     // Guardians still holding a photo although none of their children is active.
     const fetchRetention = () =>
@@ -83,16 +135,38 @@ export function GuardianSecuritySection() {
 
     const loadPending = async () => setPending(await fetchPending());
     const loadRetention = async () => setRetention(await fetchRetention());
+    const loadIncidents = async () => setIncidents(await fetchIncidents());
+    const loadOverrides = async () => setOverrides(await fetchOverrides());
+
+    const loadSecurity = async (id: string) => {
+        const { data } = await supabase.rpc("guardian_security_status", { p_guardian_id: id });
+        setSecurity(data ? { id, status: data as SecurityStatus } : null);
+    };
 
     const refreshSelected = async (id: string) => {
         const { data } = await supabase.from("guardians").select(GUARDIAN_SELECT).eq("id", id).maybeSingle();
         setSelected((data as unknown as GuardianRow) ?? null);
+        void loadSecurity(id);
+    };
+
+    const openGuardian = (g: GuardianRow) => {
+        setSelected(g);
+        void loadSecurity(g.id);
+    };
+
+    const openGuardianById = async (id: string) => {
+        setMessage(null);
+        await refreshSelected(id);
+        window.scrollTo({ top: 0, behavior: "smooth" });
     };
 
     useEffect(() => {
         let cancelled = false;
         fetchPending().then((rows) => { if (!cancelled) setPending(rows); });
         fetchRetention().then((rows) => { if (!cancelled) setRetention(rows); });
+        fetchIncidents().then((rows) => { if (!cancelled) setIncidents(rows); });
+        fetchOverrides().then((rows) => { if (!cancelled) setOverrides(rows); });
+        void cleanUpReplacedPhotos();
         return () => { cancelled = true; };
     }, []);
 
@@ -166,12 +240,100 @@ export function GuardianSecuritySection() {
         if (selected?.id === g.id) void refreshSelected(g.id);
     };
 
+    // ─── Phase 5C actions ───
+    const lockdown = async (g: GuardianRow) => {
+        const reason = window.prompt(
+            `LOCK DOWN ${g.full_name}?\n\n` +
+            "This suspends all of their pickup QR codes and replaces them, cancels their temporary QR codes, " +
+            "signs them out on every device and blocks sign-in until an admin restores access after checking them in person.\n\n" +
+            "Reason (e.g. \"Lost phone, reported by parent\"):",
+        );
+        if (reason === null) return;
+        if (!reason.trim()) { flash(false, "A reason is required to lock down an account."); return; }
+        setBusy(true);
+        const { data, error } = await supabase.rpc("lockdown_guardian", { p_guardian_id: g.id, p_reason: reason.trim() });
+        setBusy(false);
+        if (error || data?.error) {
+            flash(false, data?.error === "already_locked" ? `${g.full_name} is already locked down.` : "Couldn't lock down this account. Please try again.");
+            return;
+        }
+        flash(true,
+            `${g.full_name} is locked down: ${data.links_suspended} pickup link(s) suspended, ` +
+            `${data.temporary_qrs_revoked} temporary QR code(s) cancelled, ${data.sessions_ended} session(s) ended.`);
+        void refreshSelected(g.id);
+        void loadIncidents();
+    };
+
+    const restore = async (g: GuardianRow) => {
+        const note = window.prompt(
+            `Restore access for ${g.full_name}?\n\nOnly do this after checking the guardian in person with a valid ID. ` +
+            "Their pickup links re-open with NEW QR codes, and they must set a new password when they sign in.\n\n" +
+            "Note (e.g. \"Verified with driver's licence at the office\"):",
+        );
+        if (note === null) return;
+        if (!note.trim()) { flash(false, "A note is required to restore access."); return; }
+        setBusy(true);
+        const { data, error } = await supabase.rpc("restore_guardian_access", { p_guardian_id: g.id, p_note: note.trim() });
+        setBusy(false);
+        if (error || data?.error) {
+            flash(false, error?.code === "42501" ? "Only the full admin can restore access." : "Couldn't restore access. Please try again.");
+            return;
+        }
+        flash(true, `Access restored for ${g.full_name}. They must set a new password at their next sign-in.`);
+        void refreshSelected(g.id);
+        void loadIncidents();
+    };
+
+    const setLinkAccess = async (link: GuardianLink, name: string, status: "active" | "suspended") => {
+        const question = status === "suspended"
+            ? `Suspend pickup of ${name} for this guardian? Their QR code for ${name} stops working until re-activated.`
+            : `Re-activate pickup of ${name} for this guardian?`;
+        if (!window.confirm(question)) return;
+        setBusy(true);
+        const { data, error } = await supabase.rpc("set_guardian_link_access", { p_link_id: link.id, p_status: status });
+        setBusy(false);
+        if (error || data?.error) {
+            flash(false, data?.error === "guardian_locked"
+                ? "This guardian is locked down. Restore access first."
+                : "Couldn't change pickup access. Please try again.");
+            return;
+        }
+        flash(true, status === "suspended" ? `Pickup of ${name} suspended.` : `Pickup of ${name} re-activated.`);
+        if (selected) void refreshSelected(selected.id);
+    };
+
+    const rotateQr = async (link: GuardianLink, name: string) => {
+        if (!window.confirm(`Replace the pickup QR code for ${name}? The current code (and any screenshot of it) stops working at once; the parent sees the new one in their portal.`)) return;
+        setBusy(true);
+        const { error } = await supabase.rpc("rotate_guardian_link_qr", { p_link_id: link.id });
+        setBusy(false);
+        if (error) { flash(false, "Couldn't replace the QR code. Please try again."); return; }
+        flash(true, `New QR code issued for ${name}.`);
+        if (selected) void loadSecurity(selected.id);
+    };
+
+    const allowSecondPickup = async (studentId: string, name: string) => {
+        const reason = window.prompt(
+            `Allow ONE more pickup of ${name} today?\n\nUse this when the student was already picked up but must be picked up again (e.g. came back for an activity).\n\nReason:`,
+        );
+        if (reason === null) return;
+        if (!reason.trim()) { flash(false, "A reason is required."); return; }
+        setBusy(true);
+        const { error } = await supabase.rpc("grant_pickup_override", { p_student_id: studentId, p_reason: reason.trim() });
+        setBusy(false);
+        if (error) { flash(false, "Couldn't allow the extra pickup. Please try again."); return; }
+        flash(true, `One more pickup of ${name} is allowed today.`);
+        void loadOverrides();
+    };
+
+    const status = selected && security?.id === selected.id ? security.status : null;
+
     return (
         <div className="space-y-6">
             <div>
                 <h1 className="text-3xl font-bold text-[#1a2b4a] mb-2">Guardian Security</h1>
                 <p className="text-[#6b6456]">
-                    Pickup-verification photos for guardians and students. Photos are private and only
+                    Pickup photos, pickup QR codes and account lockdown for guardians. Photos are private and only
                     shown to guards at pickup and to the school office.
                 </p>
             </div>
@@ -180,6 +342,29 @@ export function GuardianSecuritySection() {
                 <div className={`flex items-start gap-2 p-3 rounded-lg text-sm border ${message.ok ? "bg-green-50 border-green-200 text-green-700" : "bg-red-50 border-red-200 text-red-700"}`}>
                     {message.ok ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
                     <span>{message.text}</span>
+                </div>
+            )}
+
+            {/* Locked accounts */}
+            {incidents.length > 0 && (
+                <div className="bg-red-50 rounded-xl border border-red-200 p-6">
+                    <div className="flex items-center gap-2 mb-3">
+                        <Lock className="w-5 h-5 text-red-700" />
+                        <h3 className="text-lg font-semibold text-red-800">Locked-down guardians</h3>
+                    </div>
+                    <div className="space-y-2">
+                        {incidents.map((i) => (
+                            <div key={i.guardian_id} className="flex flex-wrap items-center gap-3 p-3 bg-white rounded-lg border border-red-100">
+                                <div className="flex-1 min-w-[180px]">
+                                    <p className="font-medium text-[#2c2c2c]">{i.full_name}</p>
+                                    <p className="text-xs text-[#8b8476]">{i.reason} · since {fmt(i.opened_at)}</p>
+                                </div>
+                                <button onClick={() => openGuardianById(i.guardian_id)} className="px-3 py-1.5 rounded-lg border-2 border-[#1a2b4a] text-[#1a2b4a] text-sm font-medium">
+                                    Open
+                                </button>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
 
@@ -205,7 +390,7 @@ export function GuardianSecuritySection() {
                                 </div>
                                 <div className="flex-1 min-w-[160px]">
                                     <p className="font-medium text-[#2c2c2c]">{p.full_name}</p>
-                                    <p className="text-xs text-[#8b8476]">{p.email} · {new Date(p.submitted_at).toLocaleString()}</p>
+                                    <p className="text-xs text-[#8b8476]">{p.email} · {fmt(p.submitted_at)}</p>
                                 </div>
                                 <div className="flex gap-2">
                                     <button disabled={busy} onClick={() => review(p, true)} className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium disabled:opacity-60">Approve</button>
@@ -233,11 +418,11 @@ export function GuardianSecuritySection() {
                     <button type="submit" className="px-5 py-2.5 bg-[#1a2b4a] text-white rounded-lg text-sm font-medium">Search</button>
                 </form>
 
-                {searched && results.length === 0 && <p className="text-sm text-[#8b8476]">No guardians found.</p>}
+                {searched && !selected && results.length === 0 && <p className="text-sm text-[#8b8476]">No guardians found.</p>}
                 {!selected && results.length > 0 && (
                     <div className="divide-y divide-gray-100">
                         {results.map((g) => (
-                            <button key={g.id} onClick={() => setSelected(g)} className="w-full flex items-center gap-3 py-3 text-left hover:bg-[#faf8f5] px-2 rounded-lg">
+                            <button key={g.id} onClick={() => openGuardian(g)} className="w-full flex items-center gap-3 py-3 text-left hover:bg-[#faf8f5] px-2 rounded-lg">
                                 <PhotoThumb path={g.photo_status === "approved" ? g.photo_path : null} size="w-10 h-10" />
                                 <div className="min-w-0">
                                     <p className="font-medium text-[#2c2c2c] truncate">{g.full_name}</p>
@@ -279,33 +464,121 @@ export function GuardianSecuritySection() {
                             </div>
                         </div>
 
+                        {/* Account security */}
+                        {status && (
+                            status.locked ? (
+                                <div className="p-4 rounded-xl bg-red-50 border border-red-200 space-y-3">
+                                    <div className="flex items-start gap-2">
+                                        <Lock className="w-5 h-5 text-red-700 mt-0.5 shrink-0" />
+                                        <div>
+                                            <p className="font-semibold text-red-800">Account locked down</p>
+                                            <p className="text-sm text-red-700">{status.incident_reason} · since {fmt(status.incident_opened_at)}</p>
+                                            <p className="text-xs text-red-700 mt-1">Sign-in is blocked and every pickup QR code is suspended. Check the guardian in person before restoring.</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        disabled={busy}
+                                        onClick={() => restore(selected)}
+                                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium disabled:opacity-60"
+                                    >
+                                        <Unlock className="w-4 h-4" /> Restore access (verified in person)
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="p-4 rounded-xl bg-[#faf8f5] border border-gray-200 flex flex-wrap items-center gap-3">
+                                    <div className="flex-1 min-w-[200px] text-sm text-[#6b6456]">
+                                        <p className="font-medium text-[#1a2b4a]">Account security</p>
+                                        <p>
+                                            {status.active_temporary_qrs} active temporary QR code(s)
+                                            {status.must_change_password && " · must set a new password at next sign-in"}
+                                        </p>
+                                        <p className="text-xs text-[#8b8476] mt-1">Lost phone or suspicious activity? Lock down the account at once.</p>
+                                    </div>
+                                    <button
+                                        disabled={busy}
+                                        onClick={() => lockdown(selected)}
+                                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium disabled:opacity-60"
+                                    >
+                                        <AlertTriangle className="w-4 h-4" /> Lock down account
+                                    </button>
+                                </div>
+                            )
+                        )}
+
                         <div>
                             <p className="text-xs font-semibold uppercase tracking-wider text-[#1a2b4a] mb-2">Linked students</p>
                             <div className="space-y-2">
                                 {selected.student_guardians.filter((l) => l.students).map((l) => {
                                     const s = l.students as LinkedStudent;
                                     const name = `${s.first_name} ${s.last_name}`;
+                                    const suspended = l.access_status === "suspended";
+                                    const rotated = status?.qr_rotated_at[l.id];
                                     return (
-                                        <div key={s.id} className="flex flex-wrap items-center gap-3 p-3 bg-[#faf8f5] rounded-lg">
-                                            <PhotoThumb path={s.photo_path} size="w-14 h-14" />
-                                            <div className="flex-1 min-w-[150px]">
-                                                <p className="font-medium text-[#2c2c2c]">{name}</p>
-                                                <p className="text-xs text-[#8b8476]">
-                                                    {s.grade_level} · {l.relationship ?? "Guardian"} · {s.status}
-                                                    {l.access_status === "suspended" && <span className="ml-1 font-semibold text-red-600">· Pickup suspended</span>}
-                                                </p>
+                                        <div key={l.id} className="p-3 bg-[#faf8f5] rounded-lg space-y-3">
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <PhotoThumb path={s.photo_path} size="w-14 h-14" />
+                                                <div className="flex-1 min-w-[150px]">
+                                                    <p className="font-medium text-[#2c2c2c]">{name}</p>
+                                                    <p className="text-xs text-[#8b8476]">
+                                                        {s.grade_level} · {l.relationship ?? "Guardian"} · {s.status}
+                                                        {suspended && <span className="ml-1 font-semibold text-red-600">· Pickup suspended</span>}
+                                                    </p>
+                                                    {rotated && <p className="text-[11px] text-[#8b8476]">QR code issued {fmt(rotated)}</p>}
+                                                </div>
+                                                <button
+                                                    onClick={() => setCapture({ kind: "student", id: s.id, name })}
+                                                    className="flex items-center gap-2 px-3 py-2 rounded-lg border-2 border-[#1a2b4a] text-[#1a2b4a] text-sm font-medium"
+                                                >
+                                                    <Camera className="w-4 h-4" /> {s.photo_path ? "Replace" : "Take photo"}
+                                                </button>
                                             </div>
-                                            <button
-                                                onClick={() => setCapture({ kind: "student", id: s.id, name })}
-                                                className="flex items-center gap-2 px-3 py-2 rounded-lg border-2 border-[#1a2b4a] text-[#1a2b4a] text-sm font-medium"
-                                            >
-                                                <Camera className="w-4 h-4" /> {s.photo_path ? "Replace" : "Take photo"}
-                                            </button>
+                                            <div className="flex flex-wrap gap-2">
+                                                {suspended ? (
+                                                    <button disabled={busy || status?.locked} onClick={() => setLinkAccess(l, name, "active")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-green-300 text-green-700 text-xs font-medium disabled:opacity-50">
+                                                        <PlayCircle className="w-4 h-4" /> Re-activate pickup
+                                                    </button>
+                                                ) : (
+                                                    <button disabled={busy} onClick={() => setLinkAccess(l, name, "suspended")} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-300 text-red-700 text-xs font-medium disabled:opacity-50">
+                                                        <PauseCircle className="w-4 h-4" /> Suspend pickup
+                                                    </button>
+                                                )}
+                                                <button disabled={busy} onClick={() => rotateQr(l, name)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-[#1a2b4a] text-xs font-medium disabled:opacity-50">
+                                                    <QrCode className="w-4 h-4" /> New QR code
+                                                </button>
+                                                <button disabled={busy} onClick={() => allowSecondPickup(s.id, name)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-[#1a2b4a] text-xs font-medium disabled:opacity-50">
+                                                    <CalendarPlus className="w-4 h-4" /> Allow another pickup today
+                                                </button>
+                                            </div>
                                         </div>
                                     );
                                 })}
                             </div>
                         </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Same-day overrides */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="flex items-center gap-2 mb-1">
+                    <CalendarPlus className="w-5 h-5 text-[#1a2b4a]" />
+                    <h3 className="text-lg font-semibold text-[#1a2b4a]">Extra pickups allowed today</h3>
+                </div>
+                <p className="text-sm text-[#6b6456] mb-4">
+                    A student can normally be picked up once per day. Allow one more from a guardian&apos;s linked students above.
+                </p>
+                {overrides.length === 0 ? (
+                    <p className="text-sm text-[#8b8476]">None today.</p>
+                ) : (
+                    <div className="space-y-2">
+                        {overrides.map((o) => (
+                            <div key={o.student_id} className="flex items-center justify-between gap-3 p-3 bg-[#faf8f5] rounded-lg text-sm">
+                                <span className="font-medium text-[#2c2c2c]">{o.student_name}</span>
+                                <span className={o.used_at ? "text-[#8b8476]" : "text-green-700 font-medium"}>
+                                    {o.used_at ? `Used ${new Date(o.used_at).toLocaleTimeString()}` : "Not used yet"}
+                                </span>
+                            </div>
+                        ))}
                     </div>
                 )}
             </div>
