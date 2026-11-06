@@ -27,6 +27,37 @@ function parsePickupQRPayload(text: string): PickupQRPayload | null {
   return null;
 }
 
+// Rows returned by the guard_pickup_history() / guard_record_pickup() database functions.
+interface GuardHistoryRow {
+  id: string;
+  student_id: string;
+  student_name: string;
+  grade_level: string;
+  guardian_name: string;
+  relationship: string | null;
+  guardian_id: string | null;
+  scanned_at: string;
+}
+
+interface GuardPickupRecordRow {
+  id: string;
+  student_id: string;
+  student_name: string;
+  grade_level: string;
+  guardian_name: string;
+  relationship: string | null;
+  scanned_at: string;
+}
+
+const SCAN_ERROR_MESSAGES: Record<string, string> = {
+  student_not_found: 'Invalid QR code: this student was not found in the system. Please scan again.',
+  guardian_not_linked: 'Invalid QR code: this guardian is not on file for this student. Please scan again.',
+  authorization_invalid:
+    'Invalid QR code: this temporary authorization was not found or has been revoked. Please scan again.',
+  authorization_expired: 'This temporary QR code has expired. Please scan again or ask the parent for a new one.',
+  invalid_code: 'This QR code is not a valid pickup code for this system. Please scan again.',
+};
+
 interface GuardPortalProps {
   user: any;
   onLogout: () => void;
@@ -59,7 +90,6 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [historyLoading, setHistoryLoading] = useState(true);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [schoolYearId, setSchoolYearId] = useState<string | null>(null);
   // Guards against the scanner firing onUpdate again for the same code while a
   // previous decode is still being validated/recorded.
   const processingRef = useRef(false);
@@ -70,39 +100,24 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
     return () => clearInterval(timer);
   }, []);
 
+  // Guards have no direct access to student/guardian/pickup tables; the database returns
+  // just what this screen shows through guard_pickup_history().
   const loadPickupHistory = async () => {
     setHistoryLoading(true);
-    const { data, error } = await supabase
-      .from('pickup_logs')
-      .select(`
-        id,
-        student_id,
-        guardian_id,
-        picked_up_by_name,
-        relationship,
-        scanned_at,
-        students ( first_name, last_name, grade_level ),
-        guardians ( full_name )
-      `)
-      .order('scanned_at', { ascending: false })
-      .limit(100);
+    const { data, error } = await supabase.rpc('guard_pickup_history', { p_limit: 100 });
 
     if (!error && data) {
-      const records: PickupRecord[] = data.map((row: any) => {
-        const student = row.students;
-        const guardian = row.guardians;
-        return {
-          id: row.id,
-          studentName: student ? `${student.first_name} ${student.last_name}` : row.student_id,
-          studentId: row.student_id,
-          studentGrade: student?.grade_level ?? '—',
-          parentName: guardian?.full_name ?? row.picked_up_by_name ?? 'Unknown',
-          parentId: row.guardian_id ?? (row.relationship ? row.relationship : '—'),
-          timestamp: new Date(row.scanned_at),
-          status: 'completed',
-          guardName: user.name,
-        };
-      });
+      const records: PickupRecord[] = (data as GuardHistoryRow[]).map((row) => ({
+        id: row.id,
+        studentName: row.student_name,
+        studentId: row.student_id,
+        studentGrade: row.grade_level,
+        parentName: row.guardian_name,
+        parentId: row.guardian_id ?? (row.relationship ? row.relationship : '—'),
+        timestamp: new Date(row.scanned_at),
+        status: 'completed',
+        guardName: user.name,
+      }));
       setPickupHistory(records);
     }
     setHistoryLoading(false);
@@ -112,19 +127,6 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
   useEffect(() => {
     loadPickupHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Load the current school year, for recording new pickups against it.
-  useEffect(() => {
-    (async () => {
-      const { data: sy } = await supabase
-        .from('school_years')
-        .select('id')
-        .eq('is_current', true)
-        .limit(1)
-        .maybeSingle();
-      if (sy) setSchoolYearId(sy.id);
-    })();
   }, []);
 
   const startScanning = () => {
@@ -154,86 +156,28 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
     setScanError(null);
 
     try {
-      const { data: student } = await supabase
-        .from('students')
-        .select('id, first_name, last_name, grade_level')
-        .eq('id', payload.studentId)
-        .eq('status', 'Active')
-        .maybeSingle();
+      // The database checks the student, the guardian link or temporary authorization,
+      // and records the pickup in one step (guard_record_pickup).
+      const { data, error } = await supabase.rpc('guard_record_pickup', { p_payload: payload });
+      const result = data as { record?: GuardPickupRecordRow; error?: string } | null;
 
-      if (!student) {
-        setScanError('Invalid QR code: this student was not found in the system. Please scan again.');
+      if (error || !result || !result.record) {
+        setScanError(
+          (result?.error && SCAN_ERROR_MESSAGES[result.error]) ??
+            'Could not record this pickup. Please try again.',
+        );
         return;
       }
 
-      let verifiedGuardianName = payload.guardianName;
-      let method: 'qr_persistent' | 'qr_authorization';
-      let guardianIdForLog: string | null = null;
-      let pickupAuthorizationId: string | null = null;
-
-      if (payload.type === 'permanent') {
-        const { data: link } = await supabase
-          .from('student_guardians')
-          .select('guardian_id, relationship, guardians(full_name)')
-          .eq('student_id', payload.studentId)
-          .eq('guardian_id', payload.guardianId)
-          .maybeSingle();
-        if (!link) {
-          setScanError('Invalid QR code: this guardian is not on file for this student. Please scan again.');
-          return;
-        }
-        verifiedGuardianName = (link as any).guardians?.full_name ?? payload.guardianName;
-        method = 'qr_persistent';
-        guardianIdForLog = payload.guardianId;
-      } else {
-        const { data: auth } = await supabase
-          .from('pickup_authorizations')
-          .select('id, guardian_name, relationship, valid_until, status')
-          .eq('id', payload.authId)
-          .eq('student_id', payload.studentId)
-          .maybeSingle();
-        if (!auth || auth.status !== 'active') {
-          setScanError('Invalid QR code: this temporary authorization was not found or has been revoked. Please scan again.');
-          return;
-        }
-        if (new Date(auth.valid_until) < new Date()) {
-          setScanError('This temporary QR code has expired. Please scan again or ask the parent for a new one.');
-          return;
-        }
-        verifiedGuardianName = auth.guardian_name;
-        method = 'qr_authorization';
-        pickupAuthorizationId = auth.id;
-      }
-
-      const { data, error } = await supabase
-        .from('pickup_logs')
-        .insert({
-          student_id: student.id,
-          school_year_id: schoolYearId,
-          method,
-          guardian_id: guardianIdForLog,
-          pickup_authorization_id: pickupAuthorizationId,
-          picked_up_by_name: verifiedGuardianName,
-          relationship: payload.relationship,
-          scanned_by: user.employeeId ?? null,
-          notes: null,
-        })
-        .select('id, scanned_at')
-        .single();
-
-      if (error || !data) {
-        setScanError(error?.message ?? 'Could not record this pickup. Please try again.');
-        return;
-      }
-
+      const record = result.record;
       const newPickup: PickupRecord = {
-        id: data.id,
-        studentName: `${student.first_name} ${student.last_name}`,
-        studentId: student.id,
-        studentGrade: student.grade_level,
-        parentName: verifiedGuardianName,
+        id: record.id,
+        studentName: record.student_name,
+        studentId: record.student_id,
+        studentGrade: record.grade_level,
+        parentName: record.guardian_name,
         parentId: payload.relationship,
-        timestamp: new Date(data.scanned_at),
+        timestamp: new Date(record.scanned_at),
         status: 'completed',
         guardName: user.name,
       };
