@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { NotificationBell } from './shared/NotificationBell';
+import { SelfDismissalSection } from './parent/SelfDismissalSection';
 import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
@@ -1291,6 +1292,8 @@ function StudentPickup({ user, children }: any) {
       </div>
 
       <MyPickupPhotoCard guardianId={user.id} />
+
+      <SelfDismissalSection children={children} />
 
       {/* Child Selection Filter */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

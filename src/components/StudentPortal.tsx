@@ -4,6 +4,7 @@ import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
 import { fetchAssignedTeacherMap } from '../lib/schedule';
+import { SelfDismissalBadge } from './student/SelfDismissalBadge';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
@@ -196,6 +197,7 @@ export function StudentPortal({ user, onLogout = () => {} }: { user: any; onLogo
       onSchoolYearChange={setSchoolYear}
       availableYears={availableYears}
     >
+      {activeView === 'overview' && <SelfDismissalBadge />}
       {activeView === 'overview' && (
         <StudentOverview user={user} schoolYear={schoolYear} onNavigate={setActiveView} />
       )}

@@ -10,6 +10,7 @@ import {
     User,
     Receipt,
     Lock,
+    Footprints,
 } from "lucide-react";
 import {
     getCurrentSchoolYear,
@@ -20,6 +21,7 @@ import { ReceiptsSection } from "./registrar/ReceiptsSection";
 import { GradeRecordsSection } from "./registrar/GradeRecordsSection";
 import { AcademicsSection } from "./registrar/AcademicsSection";
 import { EnrollmentSection } from "./registrar/EnrollmentSection";
+import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
 
 // The fee props in StaffDashboardProps are accepted so App.tsx can pass the same props
@@ -52,6 +54,7 @@ export function RegistrarDashboard({
         },
         { id: "receipts", label: "Receipts", icon: Receipt },
         { id: "gradeRecords", label: "Grade Records (TOR)", icon: FileCheck },
+        { id: "selfdismissal", label: "Self-Dismissal Requests", icon: Footprints },
         { id: "profile", label: "My Profile", icon: User },
     ];
     const [activeView, setActiveView] = usePersistedView(
@@ -148,6 +151,7 @@ export function RegistrarDashboard({
             {activeView === "gradeRecords" && (
                 <GradeRecordsSection schoolYear={schoolYear} />
             )}
+            {activeView === "selfdismissal" && <SelfDismissalApprovals />}
             {activeView === "profile" && (
                 <StaffProfileView user={user} color="#1a2b4a" />
             )}

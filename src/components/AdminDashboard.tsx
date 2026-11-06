@@ -12,6 +12,7 @@ import {
     Layers,
     Lock,
     ShieldCheck,
+    Footprints,
 } from "lucide-react";
 import {
     DEFAULT_TUITION_FEES,
@@ -33,6 +34,7 @@ import { OverviewSection } from "./admin/OverviewSection";
 import { FinancialSection } from "./admin/FinancialSection";
 import { SettingsSection } from "./admin/SettingsSection";
 import { GuardianSecuritySection } from "./admin/GuardianSecuritySection";
+import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
 
 export function AdminDashboard({
@@ -62,6 +64,7 @@ export function AdminDashboard({
         { id: "staff", label: "Staff & Teachers", icon: Users },
         { id: "idgeneration", label: "ID Generation", icon: CreditCard },
         { id: "guardiansecurity", label: "Guardian Security", icon: ShieldCheck },
+        { id: "selfdismissal", label: "Self-Dismissal Requests", icon: Footprints },
         { id: "profile", label: "My Profile", icon: User },
         { id: "settings", label: "System Settings", icon: Settings },
     ];
@@ -151,6 +154,7 @@ export function AdminDashboard({
                 <IDGenerationSection schoolYear={schoolYear} />
             )}
             {activeView === "guardiansecurity" && <GuardianSecuritySection />}
+            {activeView === "selfdismissal" && <SelfDismissalApprovals />}
             {activeView === "financials" && (
                 <FinancialSection
                     schoolYear={schoolYear}
