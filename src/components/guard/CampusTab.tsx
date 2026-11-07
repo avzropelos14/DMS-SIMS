@@ -97,19 +97,24 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
     const [minuteNow, setMinuteNow] = useState(nowMinutes());
+    const [loadFailed, setLoadFailed] = useState(false);
 
     const fetchStatus = useCallback(
         () => supabase.rpc("campus_status_today").then(({ data, error }) => (error ? null : (data as CampusStatus))),
         [],
     );
-    const reload = async () => { const s = await fetchStatus(); if (s) setStatus(s); };
+    const reload = async () => { const s = await fetchStatus(); if (s) setStatus(s); setLoadFailed(!s); };
 
     useEffect(() => {
         let cancelled = false;
         const load = () => {
             setMinuteNow(nowMinutes());
             if (document.visibilityState !== "visible") return;
-            fetchStatus().then((s) => { if (!cancelled && s) setStatus(s); });
+            fetchStatus().then((s) => {
+                if (cancelled) return;
+                if (s) setStatus(s);
+                setLoadFailed(!s);
+            });
         };
         load();
         const timer = window.setInterval(load, 60_000);
@@ -196,7 +201,14 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
         return (
             <div className="p-6">
                 <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6b6456] mb-4"><ArrowLeft className="w-4 h-4" /> Back</button>
-                <p className="text-center text-[#6b6456] py-8">Loading…</p>
+                {loadFailed ? (
+                    <div className="text-center py-8 space-y-3">
+                        <p className="text-[#6b6456]">Couldn't load the student list. Check the connection, or sign out and sign back in.</p>
+                        <button onClick={() => void reload()} className="px-5 py-2.5 rounded-xl bg-[#1a2b4a] text-white text-sm font-semibold">Retry</button>
+                    </div>
+                ) : (
+                    <p className="text-center text-[#6b6456] py-8">Loading…</p>
+                )}
             </div>
         );
     }
