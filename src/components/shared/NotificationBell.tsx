@@ -26,6 +26,10 @@ const KIND_DOT: Record<string, string> = {
     pickup_refused: "bg-red-500",
     photo_rejected: "bg-amber-500",
     qr_replaced: "bg-amber-500",
+    late_pickup: "bg-amber-500",
+    self_dismissal: "bg-green-500",
+    self_dismissal_revoked: "bg-amber-500",
+    self_dismissal_denied: "bg-amber-500",
 };
 
 function timeAgo(iso: string): string {

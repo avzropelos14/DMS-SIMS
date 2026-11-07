@@ -4,11 +4,12 @@ import { usePersistedView } from '../lib/usePersistedView';
 import BarcodeScanner from 'react-qr-barcode-scanner';
 import {
   QrCode, History, Shield, CheckCircle, XCircle, Clock,
-  User, Search, ArrowLeft, AlertCircle, Scan, KeyRound, Footprints
+  User, Search, ArrowLeft, AlertCircle, Scan, KeyRound, Footprints, School
 } from 'lucide-react';
 import { ChangePasswordModal } from './shared/ChangePasswordModal';
 import { getPhotoUrl } from '../lib/photo';
 import { SelfDismissalTab } from './guard/SelfDismissalTab';
+import { CampusTab } from './guard/CampusTab';
 
 // Pickup QR codes (v2) hold only a secret: {"v":2,"s":"..."}. The guard's scan is sent as-is
 // to verify_pickup_qr(), which looks up the student and guardian; nothing is recorded until
@@ -102,8 +103,8 @@ interface PickupRecord {
 export function GuardPortal({ user, onLogout }: GuardPortalProps) {
   // Restoring 'scan' only shows the scan page: the camera starts when the guard presses
   // Start Scanning (`scanning` is never persisted), so a refresh can't turn it on.
-  const [activeView, setActiveView] = usePersistedView<'home' | 'scan' | 'history' | 'dismissal'>(
-    'guard', user?.id, ['home', 'scan', 'history', 'dismissal'], 'home',
+  const [activeView, setActiveView] = usePersistedView<'home' | 'scan' | 'history' | 'dismissal' | 'campus'>(
+    'guard', user?.id, ['home', 'scan', 'history', 'dismissal', 'campus'], 'home',
   );
   const [scanning, setScanning] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -412,6 +413,21 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                     </div>
                   </div>
                 </button>
+
+                <button
+                  onClick={() => setActiveView('campus')}
+                  className="w-full bg-white border-2 border-[#1a2b4a]/15 text-[#1a2b4a] p-5 rounded-2xl shadow-sm hover:shadow-md transition-all"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 bg-[#1a2b4a]/5 rounded-2xl flex items-center justify-center">
+                      <School className="w-7 h-7" />
+                    </div>
+                    <div className="text-left">
+                      <div className="text-lg font-bold">Students on Campus</div>
+                      <div className="text-sm text-[#6b6456]">Late pickups, call list, close the day</div>
+                    </div>
+                  </div>
+                </button>
               </div>
 
               {/* Recent Pickups */}
@@ -449,6 +465,7 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
           )}
 
           {activeView === 'dismissal' && <SelfDismissalTab onBack={() => setActiveView('home')} />}
+          {activeView === 'campus' && <CampusTab onBack={() => setActiveView('home')} />}
 
           {activeView === 'scan' && (
             <div className="p-6 space-y-6">
