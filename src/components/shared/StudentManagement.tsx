@@ -13,7 +13,6 @@ import {
     Receipt,
     BookOpen,
 } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
 import { supabase } from "../../supabase";
 import { getSchoolYearByLabel } from "../../lib/schoolYear";
 import { listRooms, type Room } from "../../lib/rooms";
@@ -28,6 +27,9 @@ import {
     studentRowToStudent,
 } from "../../lib/students";
 import { StudentEditModal } from "./StudentEditModal";
+import { StudentRequirements } from "./StudentRequirements";
+import { PickupPassCard } from "./PickupPassCard";
+import { getRequirementSummaries } from "../../lib/requirements";
 
 export function StudentManagement({
     schoolYear,
@@ -51,6 +53,10 @@ export function StudentManagement({
     const [pendingStatus, setPendingStatus] = useState<StudentStatus>("Active");
     const [search, setSearch] = useState("");
     const [gradeFilter, setGradeFilter] = useState("All");
+    // Requirements (Phase 7): summaries per student for the selected school year.
+    const [rosterYearId, setRosterYearId] = useState<string | null>(null);
+    const [reqSummaries, setReqSummaries] = useState<Record<string, { complete: number; total: number }>>({});
+    const [incompleteOnly, setIncompleteOnly] = useState(false);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [savingEdit, setSavingEdit] = useState(false);
@@ -107,9 +113,13 @@ export function StudentManagement({
         const sy = await getSchoolYearByLabel(schoolYear);
         if (!sy) {
             setStudents([]);
+            setRosterYearId(null);
+            setReqSummaries({});
             setLoading(false);
             return;
         }
+        setRosterYearId(sy.id);
+        void getRequirementSummaries(sy.id).then(setReqSummaries);
 
         const { data, error } = await supabase
             .from("enrollments")
@@ -249,6 +259,7 @@ export function StudentManagement({
                   : s.status === activeTab,
         )
         .filter((s) => gradeFilter === "All" || s.grade === gradeFilter)
+        .filter((s) => !incompleteOnly || (reqSummaries[s.id] && reqSummaries[s.id].complete < reqSummaries[s.id].total))
         .filter(
             (s) =>
                 !search ||
@@ -292,48 +303,6 @@ export function StudentManagement({
         setShowStatusModal(true);
     };
 
-    // The Guard portal's scanner only accepts the PickupQRPayload shape it and the Parent
-    // portal share (see GuardPortal.tsx / ParentPortal.tsx) — type 'permanent' plus the
-    // guardian's real student_guardians link id, not the denormalized guardian_* text
-    // fields on the student row. Fetch that link when the detail modal opens.
-    const [primaryGuardian, setPrimaryGuardian] = useState<
-        { id: string; name: string; relationship: string } | null | undefined
-    >(undefined);
-
-    useEffect(() => {
-        if (!showViewModal || !selectedStudent) {
-            setPrimaryGuardian(undefined);
-            return;
-        }
-        let cancelled = false;
-        setPrimaryGuardian(undefined);
-        (async () => {
-            const { data } = await supabase
-                .from("student_guardians")
-                .select(
-                    "guardian_id, relationship, is_primary_contact, guardians(full_name)",
-                )
-                .eq("student_id", selectedStudent.id)
-                .order("is_primary_contact", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-            if (cancelled) return;
-            setPrimaryGuardian(
-                data
-                    ? {
-                          id: data.guardian_id,
-                          name:
-                              (data as any).guardians?.full_name ??
-                              selectedStudent.guardianName,
-                          relationship: data.relationship,
-                      }
-                    : null,
-            );
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [showViewModal, selectedStudent]);
 
     // Subject Assessment — the subjects assigned to the student's class section this school
     // year, each with its assigned teacher and schedule. Refetched whenever the view modal
@@ -699,19 +668,6 @@ export function StudentManagement({
             setSavingSubjectRowId(null);
         }
     };
-
-    const buildGuardianQRPayload = (
-        student: Student,
-        guardian: { id: string; name: string; relationship: string },
-    ) =>
-        JSON.stringify({
-            type: "permanent",
-            guardianId: guardian.id,
-            guardianName: guardian.name,
-            relationship: guardian.relationship,
-            studentId: student.id,
-            studentName: student.name,
-        });
 
     // Subject Assessment — its own page (not a modal) so subjects/teacher/schedule can be
     // edited inline, with every save immediately reflected here and in the Student Details view.
@@ -1281,86 +1237,13 @@ export function StudentManagement({
                                 </button>
                             </div>
 
-                            {/* Parent/Guardian QR Authentication Pass */}
-                            <div className="border-2 border-[#c9a961]/40 rounded-xl p-5 bg-[#fdf9f0]">
-                                <div className="flex items-center gap-2 mb-4">
-                                    <QrCode className="w-5 h-5 text-[#c9a961]" />
-                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
-                                        Parent/Guardian QR Authentication Pass
-                                    </h3>
-                                </div>
-                                {primaryGuardian === undefined ? (
-                                    <p className="text-sm text-[#8b8476]">
-                                        Loading linked guardian…
-                                    </p>
-                                ) : primaryGuardian === null ? (
-                                    <p className="text-sm text-[#8b8476]">
-                                        No guardian is linked to this student
-                                        yet in Student Guardians, so a pickup QR
-                                        can't be issued here. Ask the parent to
-                                        generate one from their Parent Portal
-                                        Pickup screen once they're linked, or
-                                        link a guardian first.
-                                    </p>
-                                ) : (
-                                    <div className="flex flex-col sm:flex-row gap-5 items-center sm:items-start">
-                                        <div
-                                            id={`guardian-qr-${selectedStudent.id}`}
-                                            className="p-3 bg-white rounded-lg border border-gray-200 shrink-0"
-                                        >
-                                            <QRCodeSVG
-                                                value={buildGuardianQRPayload(
-                                                    selectedStudent,
-                                                    primaryGuardian,
-                                                )}
-                                                size={128}
-                                                level="M"
-                                                includeMargin={false}
-                                            />
-                                        </div>
-                                        <div className="flex-1 min-w-0 space-y-1.5 text-sm">
-                                            <p>
-                                                <span className="text-[#8b8476]">
-                                                    Authorized Guardian:
-                                                </span>{" "}
-                                                <span className="font-semibold text-[#2c2c2c]">
-                                                    {primaryGuardian.name}
-                                                </span>
-                                            </p>
-                                            <p>
-                                                <span className="text-[#8b8476]">
-                                                    Relationship:
-                                                </span>{" "}
-                                                <span className="font-medium text-[#2c2c2c]">
-                                                    {
-                                                        primaryGuardian.relationship
-                                                    }
-                                                </span>
-                                            </p>
-                                            <p className="text-xs text-[#8b8476] pt-1">
-                                                Present this QR code at
-                                                dismissal. Security personnel
-                                                will scan it to verify the
-                                                guardian's identity before
-                                                releasing{" "}
-                                                {
-                                                    selectedStudent.name.split(
-                                                        " ",
-                                                    )[0]
-                                                }
-                                                .
-                                            </p>
-                                            <button
-                                                onClick={() => window.print()}
-                                                className="mt-2 flex items-center gap-1.5 px-3 py-1.5 border-2 border-[#c9a961] text-[#1a2b4a] rounded-lg text-xs font-semibold hover:bg-[#c9a961]/10 transition-all"
-                                            >
-                                                <Printer className="w-3.5 h-3.5" />{" "}
-                                                Print Pass
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
+                            <StudentRequirements
+                                studentId={selectedStudent.id}
+                                schoolYearId={rosterYearId}
+                                onChange={() => { if (rosterYearId) void getRequirementSummaries(rosterYearId).then(setReqSummaries); }}
+                            />
+
+                            <PickupPassCard studentId={selectedStudent.id} />
 
                             <div className="flex gap-3 pt-2 border-t border-gray-200">
                                 <button
@@ -1562,6 +1445,10 @@ export function StudentManagement({
                             ))}
                         </select>
                     </div>
+                    <label className="flex items-center gap-2 text-sm text-[#2c2c2c] whitespace-nowrap">
+                        <input type="checkbox" checked={incompleteOnly} onChange={(e) => setIncompleteOnly(e.target.checked)} />
+                        Incomplete requirements
+                    </label>
                 </div>
             </div>
 
@@ -1645,6 +1532,11 @@ export function StudentManagement({
                                                 <p className="text-xs text-[#8b8476]">
                                                     {student.email}
                                                 </p>
+                                                {reqSummaries[student.id] && reqSummaries[student.id].complete < reqSummaries[student.id].total && (
+                                                    <span className="mt-1 inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800">
+                                                        Incomplete requirements ({reqSummaries[student.id].complete}/{reqSummaries[student.id].total})
+                                                    </span>
+                                                )}
                                             </div>
                                         </td>
                                         <td className="px-6 py-4 text-sm text-[#6b6456] font-mono">

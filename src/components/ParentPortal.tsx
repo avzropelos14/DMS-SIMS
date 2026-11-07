@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { DashboardLayout } from './DashboardLayout';
 import { NotificationBell } from './shared/NotificationBell';
 import { SelfDismissalSection } from './parent/SelfDismissalSection';
+import { ChildRequirementsCard } from './parent/ChildRequirementsCard';
 import { usePersistedView, navViewIds } from '../lib/usePersistedView';
 import { supabase } from '../supabase';
 import { getCurrentSchoolYear, getSchoolYearByLabel } from '../lib/schoolYear';
@@ -667,6 +668,8 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
           </div>
         </div> */}
       </div>
+
+      {childInfo && <ChildRequirementsCard childId={childInfo.id} childName={childInfo.name} schoolYear={schoolYear} />}
 
       {/* Tuition Details - per child */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">

@@ -23,6 +23,7 @@ import {
     generateStudentId,
     splitStudentName,
 } from "../../lib/students";
+import { getMissingRequirements, saveEnrollmentRequirements } from "../../lib/requirements";
 
 const enrollmentEmptyPerson = {
     firstName: "",
@@ -560,6 +561,11 @@ export function EnrollmentSection({
     >([]);
     const [pendingLoading, setPendingLoading] = useState(true);
     const [confirmingId, setConfirmingId] = useState<string | null>(null);
+    // Missing requirements at confirmation: the registrar must choose "enroll conditionally"
+    // with a deadline (never a hard block).
+    const [conditional, setConditional] = useState<{ enrollmentId: string; studentId: string; name: string; missing: string[] } | null>(null);
+    const [condDeadline, setCondDeadline] = useState("");
+    const [condNote, setCondNote] = useState("");
     const [confirmNotice, setConfirmNotice] = useState<string | null>(null);
 
     const loadPendingEnrollments = async (syId: string) => {
@@ -875,10 +881,29 @@ export function EnrollmentSection({
 
     // Confirms a new-student enrollment after the registrar has verified (via Receipts) that
     // the enrollment fee was paid — this is the point portal accounts actually get created.
+    // Checks the requirements first; missing items open the conditional-enrollment panel.
+    const startConfirmNewEnrollment = async (
+        enrollmentId: string,
+        studentId: string,
+        studentName: string,
+    ) => {
+        setConditional(null);
+        const syId = await getCurrentSchoolYearId();
+        const missing = syId ? await getMissingRequirements(studentId, syId) : [];
+        if (missing.length > 0) {
+            setCondDeadline("");
+            setCondNote("");
+            setConditional({ enrollmentId, studentId, name: studentName, missing });
+            return;
+        }
+        await confirmNewEnrollment(enrollmentId, studentId, studentName);
+    };
+
     const confirmNewEnrollment = async (
         enrollmentId: string,
         studentId: string,
         studentName: string,
+        conditionalInfo?: { deadline: string; note: string },
     ) => {
         setConfirmingId(enrollmentId);
         setConfirmNotice(null);
@@ -932,9 +957,13 @@ export function EnrollmentSection({
                     status: "confirmed",
                     confirmed_at: new Date().toISOString(),
                     confirmed_by: user?.id || null,
+                    ...(conditionalInfo
+                        ? { conditional_deadline: conditionalInfo.deadline, conditional_note: conditionalInfo.note || null }
+                        : {}),
                 })
                 .eq("id", enrollmentId);
             if (enrollErr) throw enrollErr;
+            setConditional(null);
 
             setPendingNewEnrollments((prev) =>
                 prev.filter((p) => p.enrollmentId !== enrollmentId),
@@ -1096,6 +1125,9 @@ export function EnrollmentSection({
                     },
                     { onConflict: "student_id,school_year_id" },
                 );
+                // Keep the requirements checklist the registrar ticked (Phase 7).
+                const reqError = await saveEnrollmentRequirements(id, schoolYearId, form.enrollmentType, form.requirements);
+                if (reqError) console.error("Requirements not saved", reqError);
                 await loadPendingEnrollments(schoolYearId);
             }
 
@@ -2224,8 +2256,8 @@ export function EnrollmentSection({
                         </div>
                     ) : (
                         pendingNewEnrollments.map((p) => (
+                            <div key={p.enrollmentId}>
                             <div
-                                key={p.enrollmentId}
                                 className="px-6 py-4 flex items-center justify-between gap-3"
                             >
                                 <div>
@@ -2244,7 +2276,7 @@ export function EnrollmentSection({
                                 </div>
                                 <button
                                     onClick={() =>
-                                        confirmNewEnrollment(
+                                        startConfirmNewEnrollment(
                                             p.enrollmentId,
                                             p.studentId,
                                             p.name,
@@ -2267,6 +2299,67 @@ export function EnrollmentSection({
                                         ? "Confirming…"
                                         : "Confirm Enrollment"}
                                 </button>
+                            </div>
+                            {conditional?.enrollmentId === p.enrollmentId && (
+                                <div className="mx-6 mb-4 p-4 rounded-lg bg-amber-50 border border-amber-200 space-y-3">
+                                    <div className="flex items-start gap-2 text-sm text-amber-900">
+                                        <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                                        <div>
+                                            <p className="font-semibold">
+                                                {conditional.missing.length} requirement
+                                                {conditional.missing.length === 1 ? " is" : "s are"} still missing:
+                                            </p>
+                                            <p>{conditional.missing.join(", ")}</p>
+                                            <p className="mt-1 text-xs">
+                                                You can enroll the student conditionally. Set the date by which the
+                                                missing documents must be submitted.
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap items-end gap-3">
+                                        <label className="text-xs text-[#6b6456]">
+                                            Submit by
+                                            <input
+                                                type="date"
+                                                value={condDeadline}
+                                                min={new Date().toISOString().slice(0, 10)}
+                                                onChange={(e) => setCondDeadline(e.target.value)}
+                                                className="block mt-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-black"
+                                            />
+                                        </label>
+                                        <label className="flex-1 min-w-[180px] text-xs text-[#6b6456]">
+                                            Note (optional)
+                                            <input
+                                                value={condNote}
+                                                onChange={(e) => setCondNote(e.target.value)}
+                                                maxLength={300}
+                                                placeholder="e.g. Parent will bring the PSA copy"
+                                                className="block w-full mt-1 px-2 py-1.5 border border-gray-200 rounded-lg text-sm text-black"
+                                            />
+                                        </label>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            onClick={() =>
+                                                confirmNewEnrollment(p.enrollmentId, p.studentId, p.name, {
+                                                    deadline: condDeadline,
+                                                    note: condNote.trim(),
+                                                })
+                                            }
+                                            disabled={!condDeadline || confirmingId === p.enrollmentId}
+                                            className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium disabled:opacity-60"
+                                        >
+                                            {confirmingId === p.enrollmentId ? "Confirming…" : "Enroll conditionally"}
+                                        </button>
+                                        <button
+                                            onClick={() => setConditional(null)}
+                                            className="px-4 py-2 border-2 border-gray-200 text-[#1a2b4a] rounded-lg text-sm font-medium"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                             </div>
                         ))
                     )}
