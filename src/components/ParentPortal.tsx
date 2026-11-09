@@ -669,7 +669,7 @@ function ParentOverview({ user, schoolYear, children, selectedChild, setSelected
         </div> */}
       </div>
 
-      {childInfo && <ChildRequirementsCard childId={childInfo.id} childName={childInfo.name} schoolYear={schoolYear} />}
+      {childInfo && <ChildRequirementsCard children={children} childId={childInfo.id} childName={childInfo.name} schoolYear={schoolYear} onSelectChild={setSelectedChild} />}
 
       {/* Tuition Details - per child */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
