@@ -105,7 +105,7 @@ export function TeachersListSection({ schoolYear }: { schoolYear: string }) {
                 ? await supabase
                       .from("students")
                       .select(
-                          "id, first_name, middle_name, last_name, suffix, grade_level, section, status, school_years!inner(label)",
+                          "id, first_name, middle_name, last_name, suffix, grade_level, section, status, school_years!students_school_year_id_fkey!inner(label)",
                       )
                       .eq("status", "Active")
                       .eq("school_years.label", schoolYear)

@@ -96,7 +96,7 @@ export function OverviewSection({
             ] = await Promise.all([
                 supabase
                     .from("students")
-                    .select("id, school_years!inner(label)", {
+                    .select("id, school_years!students_school_year_id_fkey!inner(label)", {
                         count: "exact",
                         head: true,
                     })

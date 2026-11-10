@@ -353,7 +353,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
         const { data, error } = await supabase
             .from("students")
             .select(
-                "id, first_name, middle_name, last_name, suffix, grade_level, section, status, date_of_birth, home_address, guardian_name, guardian_phone, school_years!inner(label), student_id_cards(printed, issued_date, school_year_id)",
+                "id, first_name, middle_name, last_name, suffix, grade_level, section, status, date_of_birth, home_address, guardian_name, guardian_phone, school_years!students_school_year_id_fkey!inner(label), student_id_cards(printed, issued_date, school_year_id)",
             )
             .eq("status", "Active")
             .eq("school_years.label", schoolYear);
