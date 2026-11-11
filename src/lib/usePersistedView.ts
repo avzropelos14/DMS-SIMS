@@ -15,6 +15,7 @@ const SLUG_OVERRIDES: Record<string, string> = {
     idgeneration: "id-generation",
     selfdismissal: "self-dismissal",
     teacherslist: "teachers-list",
+    auditlog: "audit-log",
 };
 
 const viewPath = (role: string, viewId: string) =>
