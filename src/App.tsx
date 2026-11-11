@@ -9,11 +9,13 @@ import { StudentPortal } from './components/StudentPortal';
 import { ParentPortal } from './components/ParentPortal';
 import { GuardPortal } from './components/GuardPortal';
 import { CashierPortal } from './components/CashierPortal';
+import { IdleLogout } from './components/shared/IdleLogout';
 import { supabase } from './supabase';
 import { resolveIdentity } from './lib/resolveRole';
 import { checkTrustedDevice, getLoginStatus } from './lib/mfa';
 import { clearPersistedViews } from './lib/usePersistedView';
 import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES } from './lib/tuition';
+import { IDLE_LIMIT_MINUTES, clearLastActivity } from './lib/idleTimeout';
 import type { User } from '@supabase/supabase-js';
 
 export type UserRole = 'admin' | 'registrar' | 'teacher' | 'student' | 'parent' | 'guard' | 'cashier' | null;
@@ -174,6 +176,13 @@ function App() {
     };
   }, [currentRole]);
 
+  // On the sign-in screen, forget the previous session's activity time, so a fresh sign-in
+  // starts its idle clock now. A restored session keeps it (and times out if it went stale).
+  const showingSignIn = !isRestoringSession && !currentRole;
+  useEffect(() => {
+    if (showingSignIn) clearLastActivity();
+  }, [showingSignIn]);
+
   // Returns an error message on failure (so the Admin UI can surface it instead of
   // showing "Saved!" when an RLS rejection or network error silently dropped the write).
   const persistTuitionFees = async (fees: Record<string, number>): Promise<string | null> => {
@@ -229,6 +238,13 @@ function App() {
     setPasswordRecoveryMode(false);
     setMfaPending(null);
     setLoginNotice('');
+    clearLastActivity();
+  };
+
+  const handleIdleTimeout = async () => {
+    const minutes = currentRole ? IDLE_LIMIT_MINUTES[currentRole] : 0;
+    await handleLogout();
+    setLoginNotice(`You were signed out after ${minutes} minutes of inactivity. Please sign in again.`);
   };
 
   // For screens shown outside the login form: on failure, sign out and show the reason there.
@@ -302,6 +318,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#f5f3f0]">
+      <IdleLogout limitMinutes={IDLE_LIMIT_MINUTES[currentRole]} onTimeout={() => { void handleIdleTimeout(); }} />
       {currentRole === 'admin' && (
         <AdminDashboard user={currentUser} onLogout={handleLogout} tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
       )}
