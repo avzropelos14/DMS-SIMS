@@ -199,6 +199,11 @@ function SelfDismissalForm({ children, minGrade, onCancel, onDone }: {
             setError(ERRORS[data?.error] ?? "Couldn't save the permission. Please try again.");
             return;
         }
+        // Below the minimum grade: the admin and registrar get an email (in-app alerts are
+        // written by the database). Best effort; the request is saved either way.
+        if (data.status === "pending_approval" && data.id) {
+            void supabase.functions.invoke("notify-office-request", { body: { kind: "self_dismissal", id: data.id } });
+        }
         onDone(data.status === "active"
             ? `${child?.name ?? "Your child"} may now leave school on their own.`
             : `Request sent. The registrar will review it; you'll get a notification.`);

@@ -22,6 +22,7 @@ import { GradeRecordsSection } from "./registrar/GradeRecordsSection";
 import { AcademicsSection } from "./registrar/AcademicsSection";
 import { EnrollmentSection } from "./registrar/EnrollmentSection";
 import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
+import { NotificationBell } from "./shared/NotificationBell";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
 
 // The fee props in StaffDashboardProps are accepted so App.tsx can pass the same props
@@ -90,6 +91,7 @@ export function RegistrarDashboard({
             activeView={activeView}
             onViewChange={setActiveView}
             onLogout={onLogout}
+            headerExtra={<NotificationBell />}
             schoolYear={schoolYear}
             onSchoolYearChange={setSchoolYear}
         >

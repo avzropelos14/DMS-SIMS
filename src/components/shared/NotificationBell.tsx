@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Bell, CheckCheck } from "lucide-react";
 import { supabase } from "../../supabase";
 
-// Parent notifications (Phase 5D). The database writes them (pickups, suspensions, new QR
-// codes, photo reviews, refused pickups); this bell reads them once a minute while the tab
+// In-app notifications (Phase 5D). The database writes them: for parents, pickups, suspensions,
+// new QR codes, photo reviews and refused pickups; for the admin and registrar, self-dismissal
+// requests needing approval and teachers' grade edit requests. This bell reads them once a minute while the tab
 // is visible, and right away when the tab comes back into view.
 
 interface NotificationRow {
@@ -30,6 +31,8 @@ const KIND_DOT: Record<string, string> = {
     self_dismissal: "bg-green-500",
     self_dismissal_revoked: "bg-amber-500",
     self_dismissal_denied: "bg-amber-500",
+    self_dismissal_request: "bg-blue-500",
+    grade_edit_request: "bg-blue-500",
 };
 
 function timeAgo(iso: string): string {

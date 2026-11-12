@@ -36,6 +36,7 @@ import { FinancialSection } from "./admin/FinancialSection";
 import { SettingsSection } from "./admin/SettingsSection";
 import { GuardianSecuritySection } from "./admin/GuardianSecuritySection";
 import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
+import { NotificationBell } from "./shared/NotificationBell";
 import { AuditLogSection } from "./admin/AuditLogSection";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
 
@@ -104,6 +105,7 @@ export function AdminDashboard({
             activeView={activeView}
             onViewChange={setActiveView}
             onLogout={onLogout}
+            headerExtra={<NotificationBell />}
             schoolYear={schoolYear}
             onSchoolYearChange={setSchoolYear}
         >

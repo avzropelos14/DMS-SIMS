@@ -598,14 +598,18 @@ function MyClasses({ user, schoolYear }: any) {
 
   const confirmReopenRequest = async () => {
     if (!reopenTarget || !selectedClass || !currentSchoolYearId) return;
-    await supabase.from('grade_reopen_requests').insert({
+    const { data: request } = await supabase.from('grade_reopen_requests').insert({
       student_id: reopenTarget.studentId,
       class_section_subject_id: selectedClass,
       school_year_id: currentSchoolYearId,
       quarter: reopenTarget.quarter,
       requested_by: user.employeeId ?? null,
       notes: reopenReason.trim() || null,
-    });
+    }).select('id').single();
+    // The admin gets an email (the in-app alert is written by the database). Best effort.
+    if (request?.id) {
+      void supabase.functions.invoke('notify-office-request', { body: { kind: 'grade_reopen', id: request.id } });
+    }
     setGrades(prev => prev.map(s => {
       if (s.id !== reopenTarget.studentId) return s;
       const quarters = { ...s.quarters, [reopenTarget.quarter]: { ...s.quarters[reopenTarget.quarter], status: 'reopen_requested' as QuarterStatus } };
