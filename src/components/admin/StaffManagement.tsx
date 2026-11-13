@@ -8,6 +8,8 @@ import {
     Trash2,
     Eye,
     ArrowLeft,
+    KeyRound,
+    RotateCcw,
 } from "lucide-react";
 import { supabase } from "../../supabase";
 import {
@@ -45,6 +47,8 @@ export function StaffManagement({
         address: string;
         licenseNo?: string;
         notes?: string;
+        // Removed from the staff list (soft-deleted); can be restored.
+        removed: boolean;
     };
 
     // Positions offered when adding a new employee — each maps to a login role (see STAFF_POSITION_ROLES)
@@ -75,6 +79,7 @@ export function StaffManagement({
         address: row.address || "",
         licenseNo: row.license_no || undefined,
         notes: row.notes || undefined,
+        removed: Boolean(row.deleted_at),
     });
 
     const [employees, setEmployees] = useState<Employee[]>([]);
@@ -82,21 +87,33 @@ export function StaffManagement({
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    // Employees who currently have a login account (a profiles row). A login revoked in
+    // Manage Accounts, or removed with the employee, leaves the employee without one.
+    const [loginIds, setLoginIds] = useState<Set<string>>(new Set());
+    const [showRemoved, setShowRemoved] = useState(false);
+    const [pendingRestoreLogin, setPendingRestoreLogin] = useState<Employee | null>(null);
+    const [restoring, setRestoring] = useState(false);
+    const [restoreError, setRestoreError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
 
     const loadEmployees = async () => {
         setLoading(true);
         setLoadError(null);
-        const [{ data: empRows, error }, { data: deptRows }] =
+        // Removed employees are loaded too (admin only), so they can be restored.
+        let empQuery = supabase
+            .from("employees")
+            .select(
+                "id, full_name, position, email, phone, education, date_hired, status, address, license_no, notes, deleted_at, departments(name)",
+            )
+            .order("full_name");
+        if (!isAdmin) empQuery = empQuery.is("deleted_at", null);
+        const [{ data: empRows, error }, { data: deptRows }, { data: loginRows }] =
             await Promise.all([
-                supabase
-                    .from("employees")
-                    .select(
-                        "id, full_name, position, email, phone, education, date_hired, status, address, license_no, notes, departments(name)",
-                    )
-                    .is("deleted_at", null)
-                    .order("full_name"),
+                empQuery,
                 supabase.from("departments").select("name").order("name"),
+                supabase.from("profiles").select("employee_id").not("employee_id", "is", null),
             ]);
+        setLoginIds(new Set((loginRows ?? []).map((r: { employee_id: string }) => r.employee_id)));
         if (error) {
             setLoadError(error.message);
             setLoading(false);
@@ -176,6 +193,7 @@ export function StaffManagement({
         email: string;
         password: string | null;
         emailSent?: boolean;
+        heading?: string;
     } | null>(null);
 
     const statusConfig: Record<
@@ -221,7 +239,9 @@ export function StaffManagement({
         },
     ] as const;
 
+    const removedCount = employees.filter((e) => e.removed).length;
     const filtered = employees
+        .filter((e) => e.removed === showRemoved)
         .filter((e) => activeTab === "all" || e.status === activeTab)
         .filter((e) => deptFilter === "All" || e.department === deptFilter)
         .filter(
@@ -269,10 +289,82 @@ export function StaffManagement({
             return;
         }
         setEmployees((prev) =>
-            prev.filter((e) => e.id !== selectedEmployee.id),
+            prev.map((e) =>
+                e.id === selectedEmployee.id
+                    ? { ...e, removed: true, status: "inactive" }
+                    : e,
+            ),
         );
+        setLoginIds((prev) => {
+            const next = new Set(prev);
+            next.delete(selectedEmployee.id);
+            return next;
+        });
+        setNotice(`${selectedEmployee.name} was removed. You can restore them from the Removed list.`);
         setShowDeleteModal(false);
         setShowDetailModal(false);
+    };
+
+    // Brings a removed employee back to the staff list. Their login was deleted when they
+    // were removed, so they show "No login" until Restore login gives them a new one.
+    const restoreEmployee = async (emp: Employee) => {
+        setRestoreError(null);
+        const { error } = await supabase
+            .from("employees")
+            .update({ deleted_at: null, status: "active" })
+            .eq("id", emp.id);
+        if (error) {
+            setRestoreError(error.message);
+            return;
+        }
+        setEmployees((prev) =>
+            prev.map((e) =>
+                e.id === emp.id ? { ...e, removed: false, status: "active" } : e,
+            ),
+        );
+        setNotice(`${emp.name} is back on the staff list. Use Restore login so they can sign in again.`);
+    };
+
+    // A login revoked in Manage Accounts (or removed with the employee) is gone for good;
+    // this creates a new one. A real email gets an activation link; a school-generated
+    // address gets a new generated password, shown once.
+    const isGeneratedEmail = (email: string) =>
+        email.toLowerCase().endsWith("@missionschool.edu.ph");
+    const restoreLogin = async () => {
+        const emp = pendingRestoreLogin;
+        if (!emp) return;
+        const role = STAFF_POSITION_ROLES[emp.position];
+        if (!role) {
+            setRestoreError(
+                `${emp.name}'s position (${emp.position || "none"}) has no login role. Edit the employee and choose Teacher, Admin, Registrar, Cashier or Guard first.`,
+            );
+            return;
+        }
+        setRestoring(true);
+        setRestoreError(null);
+        try {
+            const realEmail =
+                emp.email && !isGeneratedEmail(emp.email) ? emp.email : undefined;
+            const credentials = await createStaffAccount(emp.id, role, realEmail);
+            setLoginIds((prev) => new Set(prev).add(emp.id));
+            setEmployees((prev) =>
+                prev.map((e) =>
+                    e.id === emp.id ? { ...e, email: credentials.email } : e,
+                ),
+            );
+            setPendingRestoreLogin(null);
+            setNewEmployeeCredentials({
+                name: emp.name,
+                email: credentials.email,
+                password: credentials.password,
+                emailSent: credentials.emailSent ?? false,
+                heading: "Login Restored",
+            });
+        } catch (e) {
+            setRestoreError(e instanceof Error && e.message ? e.message : "Couldn't restore the login.");
+        } finally {
+            setRestoring(false);
+        }
     };
 
     const saveEdit = async (updated: Employee) => {
@@ -347,6 +439,7 @@ export function StaffManagement({
                 role,
                 newEmployee.email.trim(),
             );
+            setLoginIds((prev) => new Set(prev).add(inserted!.id));
             setEmployees((prev) => [
                 ...prev,
                 {
@@ -361,6 +454,7 @@ export function StaffManagement({
                     status: "active",
                     address: newEmployee.address,
                     licenseNo: newEmployee.licenseNo || undefined,
+                    removed: false,
                 },
             ]);
             setNewEmployee({
@@ -396,6 +490,7 @@ export function StaffManagement({
                     .eq("employee_id", inserted.id)
                     .maybeSingle();
                 if (profile?.email) {
+                    setLoginIds((prev) => new Set(prev).add(inserted!.id));
                     setEmployees((prev) => [
                         ...prev,
                         {
@@ -410,6 +505,7 @@ export function StaffManagement({
                             status: "active",
                             address: newEmployee.address,
                             licenseNo: newEmployee.licenseNo || undefined,
+                            removed: false,
                         },
                     ]);
                     setNewEmployee({
@@ -531,6 +627,14 @@ export function StaffManagement({
                                 {
                                     label: "Date Hired",
                                     value: selectedEmployee.dateHired,
+                                },
+                                {
+                                    label: "Login Account",
+                                    value: selectedEmployee.removed
+                                        ? "Removed"
+                                        : loginIds.has(selectedEmployee.id)
+                                          ? "Active"
+                                          : "No login",
                                 },
                             ].map((item) => (
                                 <div
@@ -907,6 +1011,40 @@ export function StaffManagement({
                 </div>
             </div>
 
+            {isAdmin && (
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Which employees to show">
+                    {[
+                        { removed: false, label: `Current staff (${employees.length - removedCount})` },
+                        { removed: true, label: `Removed (${removedCount})` },
+                    ].map((v) => (
+                        <button
+                            key={v.label}
+                            onClick={() => setShowRemoved(v.removed)}
+                            aria-pressed={showRemoved === v.removed}
+                            className={`px-4 py-2 rounded-lg border-2 text-sm font-medium transition-all ${
+                                showRemoved === v.removed
+                                    ? "border-[#c9a961] bg-[#c9a961]/5 text-[#1a2b4a]"
+                                    : "border-gray-200 text-[#6b6456] hover:border-[#c9a961]/50 hover:bg-[#faf8f5]"
+                            }`}
+                        >
+                            {v.label}
+                        </button>
+                    ))}
+                </div>
+            )}
+            {notice && (
+                <div className="flex items-start justify-between gap-3 p-3 rounded-lg text-sm border bg-green-50 border-green-200 text-green-700">
+                    <span>{notice}</span>
+                    <button onClick={() => setNotice(null)} className="font-medium underline shrink-0">Dismiss</button>
+                </div>
+            )}
+            {restoreError && !pendingRestoreLogin && (
+                <div className="flex items-start justify-between gap-3 p-3 rounded-lg text-sm border bg-red-50 border-red-200 text-red-700">
+                    <span>{restoreError}</span>
+                    <button onClick={() => setRestoreError(null)} className="font-medium underline shrink-0">Dismiss</button>
+                </div>
+            )}
+
             {/* Employee List */}
             <div className="space-y-4">
                 {loading && (
@@ -933,6 +1071,17 @@ export function StaffManagement({
                                             <h3 className="font-semibold text-[#1a2b4a] text-lg leading-tight">
                                                 {emp.name}
                                             </h3>
+                                            {emp.removed ? (
+                                                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700">
+                                                    Removed
+                                                </span>
+                                            ) : (
+                                                !loginIds.has(emp.id) && (
+                                                    <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800">
+                                                        No login
+                                                    </span>
+                                                )
+                                            )}
                                         </div>
                                         <p className="text-sm font-medium text-[#c9a961] mb-1">
                                             {emp.position} – {emp.department}
@@ -965,7 +1114,25 @@ export function StaffManagement({
                                                 View
                                             </span>
                                         </button>
-                                        {isAdmin && (
+                                        {isAdmin && emp.removed && (
+                                            <button
+                                                onClick={() => { void restoreEmployee(emp); }}
+                                                className="flex items-center gap-1.5 px-3 py-2 border-2 border-green-200 rounded-lg text-sm font-medium text-green-700 hover:bg-green-50 transition-all"
+                                            >
+                                                <RotateCcw className="w-4 h-4" />
+                                                <span>Restore</span>
+                                            </button>
+                                        )}
+                                        {isAdmin && !emp.removed && !loginIds.has(emp.id) && (
+                                            <button
+                                                onClick={() => { setRestoreError(null); setPendingRestoreLogin(emp); }}
+                                                className="flex items-center gap-1.5 px-3 py-2 border-2 border-amber-200 rounded-lg text-sm font-medium text-amber-800 hover:bg-amber-50 transition-all"
+                                            >
+                                                <KeyRound className="w-4 h-4" />
+                                                <span>Restore login</span>
+                                            </button>
+                                        )}
+                                        {isAdmin && !emp.removed && (
                                             <button
                                                 onClick={() => {
                                                     setSelectedEmployee(emp);
@@ -995,7 +1162,7 @@ export function StaffManagement({
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
                         <h2 className="text-xl font-semibold text-[#1a2b4a]">
-                            Employee Added
+                            {newEmployeeCredentials.heading ?? "Employee Added"}
                         </h2>
                         <p className="text-sm text-[#6b6456]">
                             {newEmployeeCredentials.emailSent
@@ -1032,6 +1199,50 @@ export function StaffManagement({
                 </div>
             )}
 
+            {pendingRestoreLogin && isAdmin && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full">
+                        <div className="p-6 text-center space-y-4">
+                            <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto">
+                                <KeyRound className="w-7 h-7 text-amber-600" />
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-[#1a2b4a] mb-1">
+                                    Restore Login
+                                </h3>
+                                <p className="text-sm text-[#6b6456]">
+                                    Create a new login for{" "}
+                                    <strong>{pendingRestoreLogin.name}</strong> as{" "}
+                                    {pendingRestoreLogin.position || "staff"}?{" "}
+                                    {pendingRestoreLogin.email && !isGeneratedEmail(pendingRestoreLogin.email)
+                                        ? `An activation email will be sent to ${pendingRestoreLogin.email}.`
+                                        : "A new school email and password will be generated and shown once."}
+                                </p>
+                            </div>
+                            {restoreError && (
+                                <p className="text-sm text-red-500">{restoreError}</p>
+                            )}
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={() => { setPendingRestoreLogin(null); setRestoreError(null); }}
+                                    disabled={restoring}
+                                    className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl text-[#6b6456] font-medium hover:bg-[#faf8f5] transition-all disabled:opacity-60"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => { void restoreLogin(); }}
+                                    disabled={restoring}
+                                    className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#1a2b4a] to-[#2d4263] text-white rounded-xl font-medium hover:shadow-lg transition-all disabled:opacity-60"
+                                >
+                                    {restoring ? "Restoring…" : "Restore login"}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Delete Confirmation Modal */}
             {showDeleteModal && selectedEmployee && isAdmin && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -1045,10 +1256,11 @@ export function StaffManagement({
                                     Remove Employee Record
                                 </h3>
                                 <p className="text-sm text-[#6b6456]">
-                                    Permanently remove{" "}
+                                    Remove{" "}
                                     <strong>{selectedEmployee.name}</strong>{" "}
-                                    from the employee directory? This action
-                                    cannot be undone.
+                                    from the staff list and delete their login?
+                                    Their records are kept, and you can restore
+                                    them later from the Removed list.
                                 </p>
                             </div>
                             {deleteError && (

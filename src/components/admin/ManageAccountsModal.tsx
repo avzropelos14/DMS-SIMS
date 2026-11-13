@@ -480,11 +480,12 @@ export function ManageAccountsModal({
                                     Revoke Access
                                 </h3>
                                 <p className="text-sm text-[#6b6456]">
-                                    Permanently remove the login account for{" "}
-                                    <strong>{pendingRevoke.name}</strong> from
-                                    Supabase? They will no longer be able to
-                                    sign in, and a new account would need to be
-                                    created to restore access.
+                                    Remove the login account for{" "}
+                                    <strong>{pendingRevoke.name}</strong>? They
+                                    will no longer be able to sign in. Their
+                                    employee record stays, and you can give them
+                                    a new login later with Restore login in
+                                    Staff & Teachers.
                                 </p>
                             </div>
                             <div className="flex gap-3">
