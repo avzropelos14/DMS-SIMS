@@ -145,11 +145,18 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
             flash(false, data?.error === "too_soon" ? "A notice was sent less than 10 minutes ago. Please call instead." : "Couldn't send the notice.");
             return;
         }
-        // Email too, while the daily email budget allows (in-app notice is already saved).
-        const { data: mail } = await supabase.functions.invoke("notify-late-pickup", { body: { notice_id: data.notice_id } });
+        // Email and SMS too, while the daily budgets allow (in-app notice is already saved).
+        const [{ data: mail }, { data: sms }] = await Promise.all([
+            supabase.functions.invoke("notify-late-pickup", { body: { notice_id: data.notice_id } }),
+            supabase.functions.invoke("send-event-sms", { body: { kind: "late_pickup", ref: String(data.notice_id) } }),
+        ]);
         setBusy(false);
+        const channels = [
+            mail?.emailed > 0 ? `email (${mail.emailed})` : null,
+            sms?.sent > 0 ? `SMS (${sms.sent})` : null,
+        ].filter(Boolean);
         flash(true, `Parents of ${s.student_name} were notified in the app` +
-            (mail?.emailed > 0 ? ` and by email (${mail.emailed}).` : mail?.budget_reached ? ". Today's email limit is reached; please call." : "."));
+            (channels.length ? ` and by ${channels.join(" and ")}.` : mail?.budget_reached ? ". Today's email limit is reached; please call." : "."));
         void reload();
     };
 

@@ -25,6 +25,7 @@ import { functionErrorMessage, deleteAuthAccountFor } from "../../lib/accounts";
 import { getCurrentSchoolYearId } from "../../lib/students";
 import { AccountRecoveryPage } from "./AccountRecoveryPage";
 import { PickupSettingsCard } from "./PickupSettingsCard";
+import { SmsSettingsCard } from "./SmsSettingsCard";
 import { ChangeSchoolYearModal } from "./ChangeSchoolYearModal";
 import { ManageAccountsModal } from "./ManageAccountsModal";
 
@@ -1236,6 +1237,8 @@ export function SettingsSection({
                 </div>
 
                 <PickupSettingsCard />
+
+                <SmsSettingsCard />
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* User Roles & Access */}

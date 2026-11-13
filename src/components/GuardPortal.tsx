@@ -255,6 +255,8 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
       // Email the QR owner in the background (the parents' in-app notice is already saved).
       if (data?.audit_id) {
         void supabase.functions.invoke('notify-pickup-rejected', { body: { audit_id: data.audit_id } });
+        // And an SMS to that guardian's phone (within the daily SMS cap).
+        void supabase.functions.invoke('send-event-sms', { body: { kind: 'pickup_rejected', ref: String(data.audit_id) } });
       }
       setPendingScan(null);
       setRejecting(false);
