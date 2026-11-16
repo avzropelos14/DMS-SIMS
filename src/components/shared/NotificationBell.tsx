@@ -33,6 +33,7 @@ const KIND_DOT: Record<string, string> = {
     self_dismissal_denied: "bg-amber-500",
     self_dismissal_request: "bg-blue-500",
     grade_edit_request: "bg-blue-500",
+    school_closure: "bg-amber-500",
 };
 
 function timeAgo(iso: string): string {

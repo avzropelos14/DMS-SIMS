@@ -11,6 +11,7 @@ import {
     Receipt,
     Lock,
     Footprints,
+    CloudRain,
 } from "lucide-react";
 import {
     getCurrentSchoolYear,
@@ -22,6 +23,7 @@ import { GradeRecordsSection } from "./registrar/GradeRecordsSection";
 import { AcademicsSection } from "./registrar/AcademicsSection";
 import { EnrollmentSection } from "./registrar/EnrollmentSection";
 import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
+import { NoClassDaysSection } from "./shared/NoClassDaysSection";
 import { NotificationBell } from "./shared/NotificationBell";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
 
@@ -56,6 +58,7 @@ export function RegistrarDashboard({
         { id: "receipts", label: "Receipts", icon: Receipt },
         { id: "gradeRecords", label: "Grade Records (TOR)", icon: FileCheck },
         { id: "selfdismissal", label: "Self-Dismissal Requests", icon: Footprints },
+        { id: "noclassdays", label: "No-Class Days", icon: CloudRain },
         { id: "profile", label: "My Profile", icon: User },
     ];
     const [activeView, setActiveView] = usePersistedView(
@@ -154,6 +157,7 @@ export function RegistrarDashboard({
                 <GradeRecordsSection schoolYear={schoolYear} />
             )}
             {activeView === "selfdismissal" && <SelfDismissalApprovals />}
+            {activeView === "noclassdays" && <NoClassDaysSection />}
             {activeView === "profile" && (
                 <StaffProfileView user={user} color="#1a2b4a" />
             )}

@@ -13,6 +13,7 @@ import {
     Lock,
     ShieldCheck,
     Footprints,
+    CloudRain,
     ScrollText,
 } from "lucide-react";
 import {
@@ -36,6 +37,7 @@ import { FinancialSection } from "./admin/FinancialSection";
 import { SettingsSection } from "./admin/SettingsSection";
 import { GuardianSecuritySection } from "./admin/GuardianSecuritySection";
 import { SelfDismissalApprovals } from "./shared/SelfDismissalApprovals";
+import { NoClassDaysSection } from "./shared/NoClassDaysSection";
 import { NotificationBell } from "./shared/NotificationBell";
 import { AuditLogSection } from "./admin/AuditLogSection";
 import { type StaffDashboardProps } from "./shared/dashboardProps";
@@ -68,6 +70,7 @@ export function AdminDashboard({
         { id: "idgeneration", label: "ID Generation", icon: CreditCard },
         { id: "guardiansecurity", label: "Guardian Security", icon: ShieldCheck },
         { id: "selfdismissal", label: "Self-Dismissal Requests", icon: Footprints },
+        { id: "noclassdays", label: "No-Class Days", icon: CloudRain },
         { id: "auditlog", label: "Audit Log", icon: ScrollText },
         { id: "profile", label: "My Profile", icon: User },
         { id: "settings", label: "System Settings", icon: Settings },
@@ -160,6 +163,7 @@ export function AdminDashboard({
             )}
             {activeView === "guardiansecurity" && <GuardianSecuritySection />}
             {activeView === "selfdismissal" && <SelfDismissalApprovals />}
+            {activeView === "noclassdays" && <NoClassDaysSection />}
             {activeView === "auditlog" && <AuditLogSection />}
             {activeView === "financials" && (
                 <FinancialSection

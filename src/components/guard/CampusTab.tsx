@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-    AlertCircle, AlertTriangle, ArrowLeft, Bell, CheckCircle, Lock, Phone, Search, User, UserCheck,
+    AlertCircle, AlertTriangle, ArrowLeft, Bell, CalendarOff, CheckCircle, Clock, CloudRain, Lock, Phone, Search, User, UserCheck, Utensils,
 } from "lucide-react";
 import { supabase } from "../../supabase";
 import { getPhotoUrl } from "../../lib/photo";
@@ -10,8 +10,11 @@ import { formatTime12 } from "../../lib/selfDismissal";
 // still on campus after the late-pickup time (device clock) are flagged. Staff phone parents
 // from the call list, send a "still at school" notice, hand students over to the staff member
 // on duty, mark absences, and close the day once everyone is accounted for.
+// Two dismissals a day: lunch and afternoon. A student picked up at lunch (not in a half-day
+// grade) is "out for lunch" and counts as on campus again from the afternoon dismissal.
 
-type State = "on_campus" | "picked_up" | "self_dismissed" | "absent" | "handed_over" | "other_exit";
+type State = "on_campus" | "out_for_lunch" | "picked_up" | "self_dismissed" | "absent" | "handed_over" | "other_exit";
+type Session = "no_classes" | "not_started" | "morning" | "lunch" | "afternoon";
 
 interface CampusStudent {
     student_id: string;
@@ -29,6 +32,11 @@ interface CampusStudent {
 interface CampusStatus {
     day: string;
     late_pickup_time: string;
+    session?: Session;
+    school_day?: { school_day: boolean; kind?: "weekend" | "declared" | "suspended"; reason?: string; suspended_from?: string };
+    day_start_time?: string;
+    lunch_dismissal_time?: string;
+    afternoon_dismissal_time?: string;
     closed_at: string | null;
     closed_by: string | null;
     students: CampusStudent[];
@@ -43,6 +51,7 @@ interface Contact {
 
 const STATE_LABEL: Record<State, string> = {
     on_campus: "On campus",
+    out_for_lunch: "Out for lunch",
     picked_up: "Picked up",
     self_dismissed: "Left on own",
     absent: "Absent",
@@ -52,6 +61,7 @@ const STATE_LABEL: Record<State, string> = {
 
 const STATE_STYLE: Record<State, string> = {
     on_campus: "bg-amber-100 text-amber-800",
+    out_for_lunch: "bg-purple-100 text-purple-700",
     picked_up: "bg-green-100 text-green-700",
     self_dismissed: "bg-green-100 text-green-700",
     absent: "bg-gray-100 text-gray-600",
@@ -198,7 +208,8 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
         if (error || data?.error) {
             flash(false, data?.error === "unaccounted"
                 ? `Can't close: ${data.count} student(s) are still unaccounted for.`
-                : data?.error === "already_closed" ? "Today is already closed." : "Couldn't close the day.");
+                : data?.error === "already_closed" ? "Today is already closed."
+                : data?.error === "too_early" ? "The day can be closed once the afternoon dismissal starts." : "Couldn't close the day.");
             return;
         }
         flash(true, "Dismissal closed for today. Thank you!");
@@ -221,8 +232,56 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
         );
     }
 
+    const session: Session = status.session ?? "afternoon";
+    const dayStart = status.day_start_time ?? "07:00";
+    const lunchTime = status.lunch_dismissal_time ?? "11:30";
+    const afternoonTime = status.afternoon_dismissal_time ?? "16:00";
+    const SESSION_LABEL: Record<Session, string> = {
+        no_classes: "No classes",
+        not_started: "Not started",
+        morning: "Classes in session",
+        lunch: `Lunch dismissal (from ${formatTime12(lunchTime)})`,
+        afternoon: `Afternoon dismissal (from ${formatTime12(afternoonTime)})`,
+    };
+
+    const suspendedFrom = status.school_day?.kind === "suspended" ? status.school_day.suspended_from ?? null : null;
+    if (session === "no_classes" && !status.closed_at) {
+        const sd = status.school_day;
+        return (
+            <div className="p-6 space-y-4">
+                <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6b6456]"><ArrowLeft className="w-4 h-4" /> Back</button>
+                <h2 className="text-xl font-bold text-[#1a2b4a]">Students on Campus</h2>
+                <div className="rounded-2xl border-2 border-[#eae7e0] bg-[#faf8f5] p-6 text-center space-y-2">
+                    <CalendarOff className="w-10 h-10 text-[#c9a961] mx-auto" />
+                    <p className="font-semibold text-[#1a2b4a]">No classes today</p>
+                    <p className="text-sm text-[#6b6456]">
+                        {sd?.kind === "weekend" ? `It's ${sd.reason}.` : sd?.reason ? `${sd.reason}.` : ""} There is no dismissal to track.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    if (session === "not_started" && !status.closed_at) {
+        return (
+            <div className="p-6 space-y-4">
+                <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6b6456]"><ArrowLeft className="w-4 h-4" /> Back</button>
+                <h2 className="text-xl font-bold text-[#1a2b4a]">Students on Campus</h2>
+                <div className="rounded-2xl border-2 border-[#eae7e0] bg-[#faf8f5] p-6 text-center space-y-2">
+                    <Clock className="w-10 h-10 text-[#c9a961] mx-auto" />
+                    <p className="font-semibold text-[#1a2b4a]">The school day hasn&apos;t started yet</p>
+                    <p className="text-sm text-[#6b6456]">
+                        The list opens at {formatTime12(dayStart)}. Lunch dismissal starts at {formatTime12(lunchTime)}, the
+                        afternoon dismissal at {formatTime12(afternoonTime)}.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     const isLate = minuteNow >= toMinutes(status.late_pickup_time);
     const onCampus = status.students.filter((s) => s.state === "on_campus");
+    const outForLunch = status.students.filter((s) => s.state === "out_for_lunch");
     const withStaff = status.students.filter((s) => s.state === "handed_over");
     const q = query.trim().toLowerCase();
     const shown = status.students
@@ -236,8 +295,22 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
             <button onClick={onBack} className="flex items-center gap-2 text-sm text-[#6b6456]"><ArrowLeft className="w-4 h-4" /> Back</button>
             <div>
                 <h2 className="text-xl font-bold text-[#1a2b4a]">Students on Campus</h2>
-                <p className="text-sm text-[#6b6456]">Late pickup after {formatTime12(status.late_pickup_time)}.</p>
+                <p className="text-sm text-[#6b6456]">
+                    <span className="inline-block px-2 py-0.5 mr-1.5 rounded-full text-[11px] font-semibold bg-[#1a2b4a] text-white">{SESSION_LABEL[session]}</span>
+                    Late pickup after {formatTime12(status.late_pickup_time)}.
+                </p>
             </div>
+
+            {suspendedFrom && !status.closed_at && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-900">
+                    <CloudRain className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                        <strong>Classes suspended from {formatTime12(suspendedFrom)}</strong>
+                        {status.school_day?.reason ? `: ${status.school_day.reason}` : ""}. Parents were told; release every student
+                        to their parent, and hand over anyone not picked up.
+                    </span>
+                </div>
+            )}
 
             {status.closed_at ? (
                 <div className="flex items-start gap-2 p-3 rounded-xl bg-green-50 border border-green-200 text-sm text-green-800">
@@ -259,9 +332,18 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
                     <div className="text-2xl font-bold">{withStaff.length}</div><div className="text-[11px]">With staff</div>
                 </div>
                 <div className="rounded-xl p-3 bg-green-50 text-green-800">
-                    <div className="text-2xl font-bold">{status.students.length - onCampus.length - withStaff.length}</div><div className="text-[11px]">Gone / absent</div>
+                    <div className="text-2xl font-bold">{status.students.length - onCampus.length - withStaff.length - outForLunch.length}</div><div className="text-[11px]">Gone / absent</div>
                 </div>
             </div>
+            {outForLunch.length > 0 && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-purple-50 border border-purple-200 text-sm text-purple-800">
+                    <Utensils className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                        <strong>{outForLunch.length} out for lunch.</strong> They count as on campus again from the afternoon
+                        dismissal at {formatTime12(afternoonTime)}.
+                    </span>
+                </div>
+            )}
 
             {message && (
                 <div className={`flex items-start gap-2 p-3 rounded-xl text-sm border ${message.ok ? "bg-green-50 border-green-200 text-green-700" : "bg-red-50 border-red-200 text-red-700"}`}>
@@ -366,9 +448,13 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
             {!status.closed_at && (
                 <div className="rounded-2xl border-2 border-[#eae7e0] p-4 space-y-3">
                     <p className="font-semibold text-[#1a2b4a]">Close dismissal for today</p>
-                    {onCampus.length > 0 ? (
+                    {session !== "afternoon" ? (
                         <p className="text-sm text-[#6b6456]">
-                            {onCampus.length} student(s) still unaccounted for. Each must be picked up, handed over to staff on duty, or marked absent before the day can be closed.
+                            The day can be closed after the afternoon dismissal starts at {formatTime12(afternoonTime)}.
+                        </p>
+                    ) : onCampus.length + outForLunch.length > 0 ? (
+                        <p className="text-sm text-[#6b6456]">
+                            {onCampus.length + outForLunch.length} student(s) still unaccounted for. Each must be picked up, handed over to staff on duty, or marked absent before the day can be closed.
                         </p>
                     ) : confirmClose ? (
                         <>

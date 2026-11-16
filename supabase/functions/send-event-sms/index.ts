@@ -5,6 +5,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // Body: { kind, ref? }
 //   pickup_rejected  ref = audit id of the refusal   (the guard who recorded it, within 10 min)
 //   late_pickup      ref = late notice id             (the staff who sent it, within 10 min)
+//   closure          ref = date (YYYY-MM-DD) of a no-class day / suspension just declared by this
+//                    admin or registrar: one SMS to each parent of an active student
 //   test             one SMS to the full admin's own employee phone
 //   status           full admin: credits left, SMS sent today, daily cap (sends nothing)
 // The database checks the caller made that event and claims each recipient once
@@ -66,6 +68,10 @@ type Claim = {
   when?: string;
   school_phone?: string | null;
   no_phone?: boolean;
+  closure_day?: string;
+  closure_today?: boolean;
+  closure_from?: string | null;
+  closure_reason?: string;
 };
 
 function compose(kind: string, c: Claim, r?: Recipient): string {
@@ -75,6 +81,13 @@ function compose(kind: string, c: Claim, r?: Recipient): string {
     // A late notice can cover brothers and sisters; each parent gets their own children's names.
     const verb = (r?.count ?? 1) > 1 ? "are" : "is";
     return `DMS-SIMS: ${student} ${verb} still at school at ${c.when}. Please pick them up as soon as possible${call}.`;
+  }
+  if (kind === "closure") {
+    if (c.closure_from) {
+      return `DMS-SIMS: Classes ${c.closure_today ? "today" : `on ${c.closure_day}`} are suspended from ${c.closure_from}: ` +
+        `${c.closure_reason}. Please pick up your child from that time.`;
+    }
+    return `DMS-SIMS: No classes on ${c.closure_day}: ${c.closure_reason}.`;
   }
   if (kind === "pickup_rejected") {
     return `DMS-SIMS: The guard refused a pickup of ${student} made with your QR code at ${c.when}. ` +
@@ -143,10 +156,10 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ configured: Boolean(IPROG_TOKEN), balance, ...(usage ?? {}) });
     }
 
-    if (!["pickup_rejected", "late_pickup", "test"].includes(kind)) {
+    if (!["pickup_rejected", "late_pickup", "closure", "test"].includes(kind)) {
       return jsonResponse({ error: "Invalid request" }, 400);
     }
-    if (kind !== "test" && !/^[0-9]{1,18}$/.test(ref)) {
+    if (kind === "closure" ? !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(ref) : kind !== "test" && !/^[0-9]{1,18}$/.test(ref)) {
       return jsonResponse({ error: "Invalid request" }, 400);
     }
     // Not set up yet: nothing is claimed, so nothing is lost.

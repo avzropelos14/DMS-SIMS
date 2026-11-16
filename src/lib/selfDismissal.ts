@@ -76,7 +76,19 @@ export async function confirmPassword(password: string): Promise<string | null> 
     return null;
 }
 
-export async function getPickupSettings(): Promise<{ self_dismissal_min_grade: number; late_pickup_time: string } | null> {
+export interface PickupSettings {
+    self_dismissal_min_grade: number;
+    late_pickup_time: string;
+    // The school day (Philippine time): before day_start the guard's list hasn't started; the
+    // lunch and afternoon dismissals open at their times; half-day grades go home at lunch.
+    day_start_time?: string;
+    lunch_dismissal_time?: string;
+    afternoon_dismissal_time?: string;
+    half_day_grades?: string[];
+    saturday_classes?: boolean;
+}
+
+export async function getPickupSettings(): Promise<PickupSettings | null> {
     const { data, error } = await supabase.rpc("get_pickup_settings");
     if (error || !data) return null;
     return data;

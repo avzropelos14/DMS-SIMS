@@ -43,6 +43,10 @@ const ACTION_LABELS: Record<string, string> = {
     pickup_pass_printed: "Printed pickup pass issued",
     pickup_rejected: "Pickup rejected at the gate",
     pickup_settings_changed: "Pickup settings changed",
+    dismissal_schedule_changed: "Dismissal schedule changed",
+    no_classes_declared: "No classes declared",
+    classes_suspended: "Classes suspended",
+    no_classes_cancelled: "No-class day cancelled",
     call_list_viewed: "Emergency call list viewed",
     dismissal_status_cleared: "Dismissal status cleared",
     dismissal_status_absent: "Marked absent at dismissal",
@@ -62,7 +66,7 @@ const CATEGORIES: { id: string; label: string; match: string[] }[] = [
     { id: "guardian", label: "Parent security", match: ["guardian_", "pickup_link_", "pickup_qr_"] },
     { id: "pickup", label: "Pickup & dismissal", match: ["pickup_override_", "pickup_pass_", "pickup_rejected", "call_list_", "dismissal_", "late_pickup_"] },
     { id: "selfdismissal", label: "Self-dismissal", match: ["self_dismissal_"] },
-    { id: "settings", label: "Settings", match: ["pickup_settings_"] },
+    { id: "settings", label: "Settings", match: ["pickup_settings_", "dismissal_schedule_", "no_classes_", "classes_suspended"] },
     { id: "system", label: "System", match: ["housekeeping_"] },
 ];
 
