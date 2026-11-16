@@ -7,6 +7,7 @@ import schoolLogo from './assets/dmgteLogo.jpg';
 import { ChangePasswordModal } from './shared/ChangePasswordModal';
 import { listAllSchoolYears } from '../lib/schoolYear';
 import { getSchoolSettings, DEFAULT_SCHOOL_SETTINGS } from '../lib/schoolSettings';
+import { ErrorBoundary } from './shared/ErrorBoundary';
 
 type NavItem = {
   id: string;
@@ -414,7 +415,7 @@ export function DashboardLayout({
             wider than the viewport on mobile, instead of just scrolling internally. */}
         <main className="flex-1 min-w-0 min-h-[calc(100vh-4rem)]">
           <div className="p-4 lg:p-8">
-            {children}
+            <ErrorBoundary resetKey={activeView}>{children}</ErrorBoundary>
           </div>
         </main>
       </div>
