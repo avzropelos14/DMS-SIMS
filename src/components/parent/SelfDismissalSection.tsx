@@ -70,6 +70,7 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
 
     // A permission ends by itself after its last day, so only running or waiting ones are
     // listed above; the rest is history (the last 30 days, from the server).
+    const nameOf = (id: string) => children.find((c) => c.id === id)?.name ?? id;
     const today = manilaToday();
     const isCurrent = (p: SelfDismissal) =>
         (p.status === "active" || p.status === "pending_approval") && p.valid_to >= today;
@@ -116,7 +117,6 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
             </div>
         );
     }
-    const nameOf = (id: string) => children.find((c) => c.id === id)?.name ?? id;
 
     return (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
