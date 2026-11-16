@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle, Footprints, Lock, Plus, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle, ChevronLeft, ChevronRight, Footprints, Lock, Plus, X } from "lucide-react";
 import { supabase } from "../../supabase";
 import {
     CONSENT_TEXT, CONSENT_VERSION, STATUS_LABEL, TRAVEL_MODES, confirmPassword, formatDateShort, formatTime12,
@@ -27,6 +27,7 @@ const ERRORS: Record<string, string> = {
 };
 
 const HISTORY_PREVIEW = 3;
+const HISTORY_PAGE_SIZE = 10;
 
 const STATUS_STYLE: Record<SelfDismissal["status"], string> = {
     active: "bg-green-100 text-green-700",
@@ -41,7 +42,7 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
     const [showForm, setShowForm] = useState(false);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
     const [confirmingId, setConfirmingId] = useState<string | null>(null);
-    const [showAllHistory, setShowAllHistory] = useState(false);
+    const [historyPage, setHistoryPage] = useState<number | null>(null); // null: normal view
 
     const fetchItems = () =>
         supabase.rpc("my_self_dismissals").then(({ data }) => (data ?? []) as SelfDismissal[]);
@@ -74,11 +75,47 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
         (p.status === "active" || p.status === "pending_approval") && p.valid_to >= today;
     const current = items.filter(isCurrent);
     const past = items.filter((p) => !isCurrent(p));
-    const shownPast = showAllHistory ? past : past.slice(0, HISTORY_PREVIEW);
     const historyLabel = (p: SelfDismissal) =>
         p.status === "active" ? "Ended" : p.status === "pending_approval" ? "Expired (not reviewed)" : STATUS_LABEL[p.status];
     const endsText = (p: SelfDismissal) =>
         p.valid_to === today ? "Ends today" : `Ends ${formatDateShort(p.valid_to)}`;
+    const historyRow = (p: SelfDismissal) => (
+        <p key={p.id} className="text-xs text-[#6b6456]">
+            {nameOf(p.student_id)} · {p.valid_from === p.valid_to ? formatDateShort(p.valid_from) : `${formatDateShort(p.valid_from)} – ${formatDateShort(p.valid_to)}`} · {historyLabel(p)}
+            {p.decision_note ? ` (${p.decision_note})` : ""}
+        </p>
+    );
+
+    // Full history: its own view with pages, so the Pickup page doesn't grow.
+    if (historyPage !== null) {
+        const pages = Math.max(1, Math.ceil(past.length / HISTORY_PAGE_SIZE));
+        const page = Math.min(historyPage, pages - 1);
+        const rows = past.slice(page * HISTORY_PAGE_SIZE, (page + 1) * HISTORY_PAGE_SIZE);
+        return (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <button onClick={() => setHistoryPage(null)} className="flex items-center gap-2 text-sm text-[#6b6456] mb-3">
+                    <ArrowLeft className="w-4 h-4" /> Back to self-dismissal
+                </button>
+                <div className="flex items-center gap-2 mb-1">
+                    <Footprints className="w-5 h-5 text-[#1a5c38]" />
+                    <h3 className="text-lg font-semibold text-[#1a2b4a]">Self-dismissal history</h3>
+                </div>
+                <p className="text-sm text-[#6b6456] mb-4">Permissions that ended, were cancelled or were not approved in the last 30 days.</p>
+                <div className="space-y-2 divide-y divide-gray-100">{rows.map((p) => <div key={p.id} className="pt-2">{historyRow(p)}</div>)}</div>
+                {pages > 1 && (
+                    <div className="flex items-center justify-between mt-4 text-sm">
+                        <button onClick={() => setHistoryPage(page - 1)} disabled={page === 0} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-[#1a2b4a] disabled:opacity-40">
+                            <ChevronLeft className="w-4 h-4" /> Newer
+                        </button>
+                        <span className="text-[#6b6456]">Page {page + 1} of {pages}</span>
+                        <button onClick={() => setHistoryPage(page + 1)} disabled={page >= pages - 1} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 text-[#1a2b4a] disabled:opacity-40">
+                            Older <ChevronRight className="w-4 h-4" />
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    }
     const nameOf = (id: string) => children.find((c) => c.id === id)?.name ?? id;
 
     return (
@@ -160,16 +197,11 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
                 <div className="mt-4">
                     <p className="text-xs font-semibold uppercase tracking-wider text-[#8b8476] mb-2">History</p>
                     <div className="space-y-1">
-                        {shownPast.map((p) => (
-                            <p key={p.id} className="text-xs text-[#6b6456]">
-                                {nameOf(p.student_id)} · {p.valid_from === p.valid_to ? formatDateShort(p.valid_from) : `${formatDateShort(p.valid_from)} – ${formatDateShort(p.valid_to)}`} · {historyLabel(p)}
-                                {p.decision_note ? ` (${p.decision_note})` : ""}
-                            </p>
-                        ))}
+                        {past.slice(0, HISTORY_PREVIEW).map(historyRow)}
                     </div>
                     {past.length > HISTORY_PREVIEW && (
-                        <button onClick={() => setShowAllHistory((v) => !v)} className="mt-2 text-xs font-medium text-[#1a5c38]">
-                            {showAllHistory ? "Show less" : `Show all (${past.length})`}
+                        <button onClick={() => { setHistoryPage(0); setMessage(null); }} className="mt-2 text-xs font-medium text-[#1a5c38]">
+                            View all history ({past.length})
                         </button>
                     )}
                 </div>
