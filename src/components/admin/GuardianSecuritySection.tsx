@@ -584,12 +584,10 @@ export function GuardianSecuritySection() {
                                                     </p>
                                                     {rotated && <p className="text-[11px] text-[#8b8476]">QR code issued {fmt(rotated)}</p>}
                                                 </div>
-                                                <button
-                                                    onClick={() => setCapture({ kind: "student", id: s.id, name })}
-                                                    className="flex items-center gap-2 px-3 py-2 rounded-lg border-2 border-[#1a2b4a] text-[#1a2b4a] text-sm font-medium"
-                                                >
-                                                    <Camera className="w-4 h-4" /> {s.photo_path ? "Replace" : "Take photo"}
-                                                </button>
+                                                {/* The student's photo is the ID photo, set only in ID Generation. */}
+                                                <p className="text-xs text-[#8b8476] max-w-[180px]">
+                                                    {s.photo_path ? "Photo from the student ID." : "No photo yet. Add it in ID Generation."}
+                                                </p>
                                             </div>
                                             <div className="flex flex-wrap gap-2">
                                                 {suspended ? (

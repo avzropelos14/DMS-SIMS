@@ -16,6 +16,7 @@ import {
 import { QRCodeSVG, QRCodeCanvas } from "qrcode.react";
 import { supabase } from "../../supabase";
 import { getSchoolYearByLabel } from "../../lib/schoolYear";
+import { compressImageFile, deletePhoto, getPhotoUrl, photoFileName, safeFolder, uploadPhoto } from "../../lib/photo";
 import {
     getSchoolSettings,
     DEFAULT_SCHOOL_SETTINGS,
@@ -261,6 +262,25 @@ function drawIdCardBack(
 
 // ID Generation Section
 // ID Generation Section
+// A saved photo as a data URL (jsPDF embeds data URLs).
+const blobToDataUrl = (blob: Blob) =>
+    new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+    });
+
+async function photoPathToDataUrl(path: string): Promise<string | null> {
+    const url = await getPhotoUrl(path);
+    if (!url) return null;
+    try {
+        return await blobToDataUrl(await (await fetch(url)).blob());
+    } catch {
+        return null;
+    }
+}
+
 export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
     const [schoolInfo, setSchoolInfo] = useState<SchoolSettings>(DEFAULT_SCHOOL_SETTINGS);
     useEffect(() => {
@@ -281,6 +301,9 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
         idPrinted: boolean;
         idIssued: string | null;
         photo?: string;
+        // The student's one official photo (students.photo_path): printed on the ID, shown to
+        // the guard at pickup and wherever else the student's photo appears.
+        photoPath?: string | null;
         dob?: string;
         dobRaw?: string;
         address?: string;
@@ -353,7 +376,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
         const { data, error } = await supabase
             .from("students")
             .select(
-                "id, first_name, middle_name, last_name, suffix, grade_level, section, status, date_of_birth, home_address, guardian_name, guardian_phone, school_years!students_school_year_id_fkey!inner(label), student_id_cards(printed, issued_date, school_year_id)",
+                "id, first_name, middle_name, last_name, suffix, grade_level, section, status, date_of_birth, home_address, guardian_name, guardian_phone, photo_path, school_years!students_school_year_id_fkey!inner(label), student_id_cards(printed, issued_date, school_year_id)",
             )
             .eq("status", "Active")
             .eq("school_years.label", schoolYear);
@@ -385,10 +408,19 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                     address: r.home_address || undefined,
                     guardianName: formatGuardianCardName(r.guardian_name),
                     emergencyContact: r.guardian_phone || undefined,
+                    photoPath: r.photo_path ?? null,
                 };
             }),
         );
         setLoading(false);
+        // Saved photos load after the list, one by one, as data URLs (the PDF needs them).
+        for (const r of (data ?? []) as { id: string; photo_path: string | null }[]) {
+            if (!r.photo_path) continue;
+            void photoPathToDataUrl(r.photo_path).then((dataUrl) => {
+                if (!dataUrl) return;
+                setIdStudents((prev) => prev.map((s) => (s.id === r.id && s.photoPath === r.photo_path ? { ...s, photo: dataUrl } : s)));
+            });
+        }
     };
 
     useEffect(() => {
@@ -416,23 +448,45 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
     );
     const [previewSide, setPreviewSide] = useState<"front" | "back">("front");
 
-    // Photos aren't backed by a database column or storage bucket yet, so uploads
-    // stay in local component state only — they don't survive a page reload.
-    const handlePhotoUpload = (file: File | null) => {
+    // The ID photo is the student's one official photo: saved to private storage
+    // (guardian-photos/students/<id>/) and set as students.photo_path, so the guard sees the same
+    // photo at pickup. It is compressed in the browser first (lib/photo.ts).
+    const [photoSaving, setPhotoSaving] = useState(false);
+    const [photoError, setPhotoError] = useState<string | null>(null);
+    const [editPhotoFile, setEditPhotoFile] = useState<File | null>(null);
+
+    const saveStudentPhoto = async (
+        studentId: string,
+        file: File,
+    ): Promise<{ error: string | null; path?: string; dataUrl?: string }> => {
+        let blob: Blob;
+        try {
+            blob = await compressImageFile(file);
+        } catch (e) {
+            return { error: e instanceof Error ? e.message : "Couldn't read that photo." };
+        }
+        const path = `students/${safeFolder(studentId)}/${photoFileName()}`;
+        const uploadError = await uploadPhoto(path, blob);
+        if (uploadError) return { error: `Couldn't upload the photo: ${uploadError}` };
+        const { data, error } = await supabase.rpc("set_student_photo", { p_student_id: studentId, p_path: path });
+        if (error) {
+            await deletePhoto(path);
+            return { error: "Couldn't save the photo. Please try again." };
+        }
+        await deletePhoto(data?.delete_path);
+        const dataUrl = (await blobToDataUrl(blob)) ?? undefined;
+        setIdStudents((prev) => prev.map((s) => (s.id === studentId ? { ...s, photo: dataUrl, photoPath: path } : s)));
+        setPreviewStudent((prev) => (prev && prev.id === studentId ? { ...prev, photo: dataUrl, photoPath: path } : prev));
+        return { error: null, path, dataUrl };
+    };
+
+    const handlePhotoUpload = async (file: File | null) => {
         if (!file || !previewStudent) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-            const dataUrl = reader.result as string;
-            setIdStudents((prev) =>
-                prev.map((s) =>
-                    s.id === previewStudent.id ? { ...s, photo: dataUrl } : s,
-                ),
-            );
-            setPreviewStudent((prev) =>
-                prev ? { ...prev, photo: dataUrl } : prev,
-            );
-        };
-        reader.readAsDataURL(file);
+        setPhotoSaving(true);
+        setPhotoError(null);
+        const { error } = await saveStudentPhoto(previewStudent.id, file);
+        setPhotoSaving(false);
+        if (error) setPhotoError(error);
     };
 
     const filtered = idStudents
@@ -816,6 +870,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                                         onChange={(e) => {
                                             const file = e.target.files?.[0];
                                             if (!file) return;
+                                            setEditPhotoFile(file);
                                             const reader = new FileReader();
                                             reader.onload = () =>
                                                 setEditingStudent((prev) =>
@@ -898,6 +953,17 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                                     );
                                     return;
                                 }
+                                let photoUpdate: { photo?: string; photoPath?: string } = {};
+                                if (editPhotoFile) {
+                                    const saved = await saveStudentPhoto(editingStudent.id, editPhotoFile);
+                                    if (saved.error) {
+                                        setSavingEdit(false);
+                                        setEditSaveError(`Details saved, but the photo wasn't: ${saved.error}`);
+                                        return;
+                                    }
+                                    photoUpdate = { photo: saved.dataUrl, photoPath: saved.path };
+                                    setEditPhotoFile(null);
+                                }
                                 setSavingEdit(false);
                                 const dobLabel = editingStudent.dobRaw
                                     ? formatDate(editingStudent.dobRaw)
@@ -907,6 +973,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                                         e.id === editingStudent.id
                                             ? {
                                                   ...editingStudent,
+                                                  ...photoUpdate,
                                                   dob: dobLabel,
                                               }
                                             : e,
@@ -1126,6 +1193,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                                                         setEditingStudent({
                                                             ...s,
                                                         });
+                                                        setEditPhotoFile(null);
                                                         setShowEditStudentModal(
                                                             true,
                                                         );
@@ -1352,20 +1420,35 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                             {previewSide === "front" && (
                                 <label className="w-full mt-3 flex items-center justify-center gap-2 px-4 py-2 border-2 border-dashed border-[#1a6b45] text-[#1a6b45] rounded-lg text-sm font-medium hover:bg-[#f4faf6] transition-all cursor-pointer">
                                     <Plus className="w-4 h-4" />
-                                    {previewStudent.photo
-                                        ? "Replace Student Photo"
-                                        : "Upload Student Photo"}
+                                    {photoSaving
+                                        ? "Saving photo…"
+                                        : previewStudent.photo
+                                          ? "Replace Student Photo"
+                                          : "Upload Student Photo"}
                                     <input
                                         type="file"
                                         accept="image/*"
                                         className="hidden"
-                                        onChange={(e) =>
-                                            handlePhotoUpload(
+                                        disabled={photoSaving}
+                                        onChange={(e) => {
+                                            void handlePhotoUpload(
                                                 e.target.files?.[0] || null,
-                                            )
-                                        }
+                                            );
+                                            e.target.value = "";
+                                        }}
                                     />
                                 </label>
+                            )}
+                            {previewSide === "front" && (
+                                <p className="w-full mt-1.5 text-[11px] text-[#8b8476] text-center">
+                                    This is the student's official photo. Guards see it at pickup too.
+                                </p>
+                            )}
+                            {photoError && (
+                                <div className="w-full mt-3 flex items-start gap-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                                    <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                                    <span>{photoError}</span>
+                                </div>
                             )}
 
                             {pdfError && (
