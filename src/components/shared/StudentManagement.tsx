@@ -12,6 +12,7 @@ import {
     QrCode,
     Receipt,
     BookOpen,
+    Users,
 } from "lucide-react";
 import { supabase } from "../../supabase";
 import { getSchoolYearByLabel } from "../../lib/schoolYear";
@@ -29,6 +30,7 @@ import {
 import { StudentEditModal } from "./StudentEditModal";
 import { StudentRequirements } from "./StudentRequirements";
 import { PickupPassCard } from "./PickupPassCard";
+import { GuardianInfoPage } from "./GuardianInfoPage";
 import { getRequirementSummaries } from "../../lib/requirements";
 
 export function StudentManagement({
@@ -46,6 +48,7 @@ export function StudentManagement({
     const [showSubjectAssessmentModal, setShowSubjectAssessmentModal] =
         useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
+    const [showGuardianPage, setShowGuardianPage] = useState(false);
     const [showStatusModal, setShowStatusModal] = useState(false);
     const [selectedStudent, setSelectedStudent] = useState<Student | null>(
         null,
@@ -1092,6 +1095,16 @@ export function StudentManagement({
         );
     }
 
+    if (showGuardianPage && selectedStudent) {
+        return (
+            <GuardianInfoPage
+                studentId={selectedStudent.id}
+                studentLabel={`${selectedStudent.name} • ${selectedStudent.grade}${selectedStudent.section ? ` - ${selectedStudent.section}` : ""}`}
+                onBack={() => setShowGuardianPage(false)}
+            />
+        );
+    }
+
     if (showViewModal && selectedStudent) {
         return (
                 <div className="space-y-6">
@@ -1199,6 +1212,23 @@ export function StudentManagement({
                                         !!subjectAssessmentError
                                     }
                                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    View
+                                </button>
+                            </div>
+
+                            {/* Parent / Guardian — linked parents' details, edited on their own page */}
+                            <div className="border border-gray-200 rounded-xl p-5 flex items-center justify-between gap-3 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                    <Users className="w-5 h-5 text-[#1a2b4a]" />
+                                    <h3 className="text-sm font-semibold text-[#1a2b4a]">
+                                        Parent / Guardian
+                                    </h3>
+                                </div>
+                                <button
+                                    onClick={() => setShowGuardianPage(true)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border-2 border-gray-200 text-[#1a2b4a] hover:border-[#1a2b4a]/30 transition-all"
                                 >
                                     <Eye className="w-3.5 h-3.5" />
                                     View
