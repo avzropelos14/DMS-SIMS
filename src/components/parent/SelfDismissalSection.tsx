@@ -26,6 +26,8 @@ const ERRORS: Record<string, string> = {
     password_required: "Your password confirmation expired. Please enter your password again.",
 };
 
+const HISTORY_PREVIEW = 3;
+
 const STATUS_STYLE: Record<SelfDismissal["status"], string> = {
     active: "bg-green-100 text-green-700",
     pending_approval: "bg-amber-100 text-amber-700",
@@ -39,6 +41,7 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
     const [showForm, setShowForm] = useState(false);
     const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
     const [confirmingId, setConfirmingId] = useState<string | null>(null);
+    const [showAllHistory, setShowAllHistory] = useState(false);
 
     const fetchItems = () =>
         supabase.rpc("my_self_dismissals").then(({ data }) => (data ?? []) as SelfDismissal[]);
@@ -64,8 +67,18 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
         void reload();
     };
 
-    const current = items.filter((p) => p.status === "active" || p.status === "pending_approval");
-    const past = items.filter((p) => p.status === "denied" || p.status === "revoked").slice(0, 5);
+    // A permission ends by itself after its last day, so only running or waiting ones are
+    // listed above; the rest is history (the last 30 days, from the server).
+    const today = manilaToday();
+    const isCurrent = (p: SelfDismissal) =>
+        (p.status === "active" || p.status === "pending_approval") && p.valid_to >= today;
+    const current = items.filter(isCurrent);
+    const past = items.filter((p) => !isCurrent(p));
+    const shownPast = showAllHistory ? past : past.slice(0, HISTORY_PREVIEW);
+    const historyLabel = (p: SelfDismissal) =>
+        p.status === "active" ? "Ended" : p.status === "pending_approval" ? "Expired (not reviewed)" : STATUS_LABEL[p.status];
+    const endsText = (p: SelfDismissal) =>
+        p.valid_to === today ? "Ends today" : `Ends ${formatDateShort(p.valid_to)}`;
     const nameOf = (id: string) => children.find((c) => c.id === id)?.name ?? id;
 
     return (
@@ -124,6 +137,9 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
                                     {" · "}not before {formatTime12(p.earliest_release_time)} · {travelLabel(p.travel_mode)}
                                     {p.guardian_name ? ` · set by ${p.guardian_name}` : ""}
                                 </p>
+                                <p className="text-xs text-[#8b8476] mt-0.5">
+                                    {endsText(p)}: it stops on its own after that day, so there&apos;s no need to cancel it.
+                                </p>
                             </div>
                             {confirmingId === p.id ? (
                                 <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -142,15 +158,20 @@ export function SelfDismissalSection({ children }: { children: Child[] }) {
             )}
             {past.length > 0 && (
                 <div className="mt-4">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b8476] mb-2">Recent</p>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[#8b8476] mb-2">History</p>
                     <div className="space-y-1">
-                        {past.map((p) => (
+                        {shownPast.map((p) => (
                             <p key={p.id} className="text-xs text-[#6b6456]">
-                                {nameOf(p.student_id)} · {formatDateShort(p.valid_from)} · {STATUS_LABEL[p.status]}
+                                {nameOf(p.student_id)} · {p.valid_from === p.valid_to ? formatDateShort(p.valid_from) : `${formatDateShort(p.valid_from)} – ${formatDateShort(p.valid_to)}`} · {historyLabel(p)}
                                 {p.decision_note ? ` (${p.decision_note})` : ""}
                             </p>
                         ))}
                     </div>
+                    {past.length > HISTORY_PREVIEW && (
+                        <button onClick={() => setShowAllHistory((v) => !v)} className="mt-2 text-xs font-medium text-[#1a5c38]">
+                            {showAllHistory ? "Show less" : `Show all (${past.length})`}
+                        </button>
+                    )}
                 </div>
             )}
         </div>
