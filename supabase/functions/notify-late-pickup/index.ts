@@ -4,6 +4,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // Late pickup (Phase 6B): after staff press "Notify parent" (in-app notice already saved by
 // notify_parent_late), this emails the student's guardians, one email each while the daily
 // "security" email budget allows. Called by the Guard Portal with { notice_id }.
+// A notice can cover brothers and sisters still on campus (one batch): each parent's email
+// names only their own children in it (claim.recipients).
 // The database checks the notice was sent by this staff member in the last 10 minutes and
 // was not emailed before (claim_late_notice_email), so it can't send arbitrary emails.
 
@@ -105,16 +107,22 @@ Deno.serve(async (req: Request) => {
     }
     if (!claim || !RESEND_API_KEY) return jsonResponse({ success: true, emailed: 0 });
 
-    const emails = ((claim.emails ?? []) as string[])
-      .filter((e) => typeof e === "string" && e.includes("@") && !e.toLowerCase().endsWith(SYNTHETIC_EMAIL_DOMAIN));
-    const studentName = String(claim.student_name ?? "Your child");
-    const student = escapeHtml(studentName);
+    type Recipient = { email: string; student_name?: string | null; count?: number };
+    const recipients: Recipient[] = Array.isArray(claim.recipients)
+      ? (claim.recipients as Recipient[])
+      : ((claim.emails ?? []) as string[]).map((email) => ({ email }));
+    const usable = recipients.filter((r) =>
+      typeof r.email === "string" && r.email.includes("@") && !r.email.toLowerCase().endsWith(SYNTHETIC_EMAIL_DOMAIN));
     const when = escapeHtml(String(claim.when ?? ""));
     const phone = claim.school_phone ? escapeHtml(String(claim.school_phone)) : null;
 
     let sent = 0;
     let budgetReached = false;
-    for (const email of emails) {
+    for (const r of usable) {
+      const email = r.email;
+      const studentName = String(r.student_name || claim.student_name || "Your child");
+      const student = escapeHtml(studentName);
+      const many = (r.count ?? 1) > 1;
       const { data: withinBudget, error: budgetError } = await admin.rpc("email_budget_consume", { p_channel: "security" });
       if (budgetError) console.error("Email budget check failed", budgetError);
       if (withinBudget !== true) {
@@ -127,10 +135,10 @@ Deno.serve(async (req: Request) => {
         body: JSON.stringify({
           from: FROM_ADDRESS,
           to: email,
-          subject: `${studentName} is still at school`,
+          subject: `${studentName} ${many ? "are" : "is"} still at school`,
           html:
-            `<p><strong>${student}</strong> has not been picked up yet (${when}).</p>` +
-            "<p>Your child is safe and waiting under the supervision of school staff. Please come to the school " +
+            `<p><strong>${student}</strong> ${many ? "have" : "has"} not been picked up yet (${when}).</p>` +
+            `<p>${many ? "Your children are" : "Your child is"} safe and waiting under the supervision of school staff. Please come to the school ` +
             (phone ? `or call the school at <strong>${phone}</strong> ` : "or call the school ") +
             "to arrange the pickup.</p>",
         }),

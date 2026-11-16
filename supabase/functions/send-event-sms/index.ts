@@ -59,7 +59,7 @@ async function sendSms(phone: string, message: string): Promise<{ ok: boolean; m
   }
 }
 
-type Recipient = { log_id: number; phone: string };
+type Recipient = { log_id: number; phone: string; student_name?: string | null; count?: number };
 type Claim = {
   recipients?: Recipient[];
   student_name?: string;
@@ -68,11 +68,13 @@ type Claim = {
   no_phone?: boolean;
 };
 
-function compose(kind: string, c: Claim): string {
-  const student = c.student_name ?? "Your child";
+function compose(kind: string, c: Claim, r?: Recipient): string {
+  const student = r?.student_name || c.student_name || "Your child";
   const call = c.school_phone ? ` or call ${c.school_phone}` : "";
   if (kind === "late_pickup") {
-    return `DMS-SIMS: ${student} is still at school at ${c.when}. Please pick them up as soon as possible${call}.`;
+    // A late notice can cover brothers and sisters; each parent gets their own children's names.
+    const verb = (r?.count ?? 1) > 1 ? "are" : "is";
+    return `DMS-SIMS: ${student} ${verb} still at school at ${c.when}. Please pick them up as soon as possible${call}.`;
   }
   if (kind === "pickup_rejected") {
     return `DMS-SIMS: The guard refused a pickup of ${student} made with your QR code at ${c.when}. ` +
@@ -165,7 +167,6 @@ Deno.serve(async (req: Request) => {
     const c = claim as Claim;
     if (c.no_phone) return jsonResponse({ success: true, sent: 0, reason: "no_phone" });
 
-    const message = compose(kind, c);
     let sent = 0;
     let failed = 0;
     let budgetReached = false;
@@ -181,7 +182,7 @@ Deno.serve(async (req: Request) => {
         await admin.rpc("sms_record_result", { p_log_id: r.log_id, p_ok: false, p_message_id: null });
         continue;
       }
-      const result = await sendSms(r.phone, message);
+      const result = await sendSms(r.phone, compose(kind, c, r));
       await admin.rpc("sms_record_result", { p_log_id: r.log_id, p_ok: result.ok, p_message_id: result.messageId });
       if (result.ok) sent++;
       else failed++;

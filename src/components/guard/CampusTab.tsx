@@ -155,7 +155,8 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
             mail?.emailed > 0 ? `email (${mail.emailed})` : null,
             sms?.sent > 0 ? `SMS (${sms.sent})` : null,
         ].filter(Boolean);
-        flash(true, `Parents of ${s.student_name} were notified in the app` +
+        const also = (data.also_notified ?? []) as string[];
+        flash(true, `Parents of ${s.student_name}${also.length ? ` (and ${also.join(", ")}, also still on campus)` : ""} were notified in the app` +
             (channels.length ? ` and by ${channels.join(" and ")}.` : mail?.budget_reached ? ". Today's email limit is reached; please call." : "."));
         void reload();
     };
