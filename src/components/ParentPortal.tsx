@@ -11,14 +11,16 @@ import { DEFAULT_TUITION_FEES, DEFAULT_ENROLLMENT_FEES, getTuitionForGrade, useT
 import schoolLogo from './assets/dmgteLogo.jpg';
 import { QRCodeCanvas } from 'qrcode.react';
 import { PhotoCaptureModal } from './shared/PhotoCaptureModal';
-import { photoFileName, uploadPhoto } from '../lib/photo';
+import { deletePhoto, getPhotoUrl, photoFileName, safeFolder, uploadPhoto } from '../lib/photo';
+import { confirmPassword } from '../lib/selfDismissal';
+import { ConfidentialPasswordInput } from './shared/ConfidentialPasswordInput';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   LayoutDashboard, Award, Calendar, Settings, Users,
   BookOpen, Download,
   QrCode, UserPlus, X, Plus, Timer, Shield, CheckCircle, AlertCircle,
-  Mail, User, Trash2, Phone, Briefcase, FileText, ArrowLeft, LogOut
+  Mail, User, Trash2, Phone, Briefcase, FileText, ArrowLeft, LogOut, Camera, Lock
 } from 'lucide-react';
 
 // Pickup QR content (v2): only a random secret. The Guard portal sends it to the database
@@ -1159,6 +1161,24 @@ function MyPickupPhotoCard({ guardianId }: { guardianId: string }) {
   );
 }
 
+// Thumbnail of a temporary pickup person's photo (the parent's own upload).
+function TempPickupPhoto({ path }: { path: string }) {
+  const [loaded, setLoaded] = useState<{ path: string; url: string | null } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getPhotoUrl(path).then((url) => { if (!cancelled) setLoaded({ path, url }); });
+    return () => { cancelled = true; };
+  }, [path]);
+  const url = loaded?.path === path ? loaded.url : null;
+  return url ? (
+    <img src={url} alt="Person picking up" className="w-12 h-12 rounded-lg object-cover border border-gray-200 mr-3 shrink-0" />
+  ) : (
+    <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 mr-3 shrink-0 flex items-center justify-center">
+      <User className="w-5 h-5 text-gray-300" />
+    </div>
+  );
+}
+
 function StudentPickup({ user, children }: any) {
   const [showTempForm, setShowTempForm] = useState(false);
   const [selectedChild, setSelectedChild] = useState('');
@@ -1171,6 +1191,13 @@ function StudentPickup({ user, children }: any) {
   const [phone, setPhone] = useState('');
   const [validHours, setValidHours] = useState('2');
   const [viewingQr, setViewingQr] = useState<any>(null);
+  // Photo of the person picking up (required) and the parent's password (checked on the server).
+  const [tempPhoto, setTempPhoto] = useState<Blob | null>(null);
+  const [tempPhotoUrl, setTempPhotoUrl] = useState<string | null>(null);
+  const [showTempCapture, setShowTempCapture] = useState(false);
+  const [tempPassword, setTempPassword] = useState('');
+  const [tempError, setTempError] = useState<string | null>(null);
+  const [tempSaving, setTempSaving] = useState(false);
 
   useEffect(() => {
     if (!selectedChild && children.length > 0) setSelectedChild(children[0].id);
@@ -1183,7 +1210,7 @@ function StudentPickup({ user, children }: any) {
     if (childIds.length === 0) return;
     const { data, error } = await supabase
       .from('pickup_authorizations')
-      .select('id, student_id, guardian_name, relationship, phone, qr_token, valid_until, status, created_at')
+      .select('id, student_id, guardian_name, relationship, phone, qr_token, valid_until, status, created_at, photo_path')
       .in('student_id', childIds)
       .order('created_at', { ascending: false });
     if (error) {
@@ -1201,6 +1228,7 @@ function StudentPickup({ user, children }: any) {
         validUntil: new Date(row.valid_until),
         status: row.status,
         createdAt: new Date(row.created_at),
+        photoPath: row.photo_path,
       }))
     );
   };
@@ -1224,33 +1252,83 @@ function StudentPickup({ user, children }: any) {
 
   const childQr = childInfo ? qrCodes[childInfo.id] : undefined;
 
-  const handleGenerateTempQR = async () => {
-    if (!guardianName || !relationship || !phone || !selectedChild) return;
+  const TEMP_ERRORS: Record<string, string> = {
+    not_allowed: "Your pickup access for this child is paused. Please contact the school office.",
+    invalid_name: "Please enter the full name of the person picking up.",
+    invalid_relationship: "Please choose their relationship to your child.",
+    invalid_phone: "Please enter a valid mobile number with 11 digits, like 09171234567.",
+    invalid_hours: "Please choose how long the QR code is valid.",
+    photo_required: "Please add a photo of the person who will pick up your child.",
+    password_required: "Your password confirmation expired. Please enter your password again.",
+  };
 
-    const expiryDate = new Date();
-    expiryDate.setHours(expiryDate.getHours() + parseInt(validHours));
+  const phoneDigits = phone.replace(/[^0-9]/g, '');
+  const phoneLooksValid = /^09[0-9]{9}$/.test(phoneDigits) || /^639[0-9]{9}$/.test(phoneDigits);
 
-    const { error } = await supabase.from('pickup_authorizations').insert({
-      id: `AUTH-${Date.now()}`,
-      student_id: selectedChild,
-      authorized_by: user.id,
-      guardian_name: guardianName,
-      relationship,
-      phone,
-      qr_token: crypto.randomUUID(),
-      valid_until: expiryDate.toISOString(),
-      status: 'active',
-    });
-    if (error) {
-      console.error('Failed to create temporary guardian authorization', error);
-      return;
-    }
+  const saveTempPhoto = async (blob: Blob) => {
+    if (tempPhotoUrl) URL.revokeObjectURL(tempPhotoUrl);
+    setTempPhoto(blob);
+    setTempPhotoUrl(URL.createObjectURL(blob));
+    setShowTempCapture(false);
+    return null;
+  };
 
-    await loadTempGuardians();
+  const resetTempForm = () => {
+    if (tempPhotoUrl) URL.revokeObjectURL(tempPhotoUrl);
     setGuardianName('');
     setRelationship('');
     setPhone('');
     setValidHours('2');
+    setTempPhoto(null);
+    setTempPhotoUrl(null);
+    setTempPassword('');
+    setTempError(null);
+  };
+
+  const handleGenerateTempQR = async () => {
+    if (!selectedChild) return;
+    setTempError(null);
+    if (!guardianName.trim()) { setTempError(TEMP_ERRORS.invalid_name); return; }
+    if (!relationship) { setTempError(TEMP_ERRORS.invalid_relationship); return; }
+    if (!phoneLooksValid) { setTempError(TEMP_ERRORS.invalid_phone); return; }
+    if (!tempPhoto) { setTempError(TEMP_ERRORS.photo_required); return; }
+    if (!tempPassword) { setTempError("Please enter your password to confirm it's you."); return; }
+
+    setTempSaving(true);
+    const pwError = await confirmPassword(tempPassword);
+    setTempPassword('');
+    if (pwError) {
+      setTempSaving(false);
+      setTempError(pwError);
+      return;
+    }
+
+    const path = `temporary/${safeFolder(user.id)}/${photoFileName()}`;
+    const uploadError = await uploadPhoto(path, tempPhoto);
+    if (uploadError) {
+      setTempSaving(false);
+      setTempError("Couldn't upload the photo. Please try again.");
+      return;
+    }
+
+    const { data, error } = await supabase.rpc('create_temporary_pickup', {
+      p_student_id: selectedChild,
+      p_name: guardianName,
+      p_relationship: relationship,
+      p_phone: phone,
+      p_valid_hours: parseInt(validHours, 10),
+      p_photo_path: path,
+    });
+    if (error || data?.error) {
+      await deletePhoto(path);
+      setTempSaving(false);
+      setTempError(TEMP_ERRORS[data?.error] ?? "Couldn't create the temporary QR code. Please try again.");
+      return;
+    }
+
+    await loadTempGuardians();
+    setTempSaving(false);
+    resetTempForm();
     setShowTempForm(false);
   };
 
@@ -1454,7 +1532,7 @@ function StudentPickup({ user, children }: any) {
                 <h3 className="text-xl font-bold truncate">Temporary Access</h3>
               </div>
               <button
-                onClick={() => setShowTempForm(!showTempForm)}
+                onClick={() => { if (showTempForm) resetTempForm(); setShowTempForm(!showTempForm); }}
                 className="flex items-center gap-2 px-4 py-2 min-h-11 bg-white/20 backdrop-blur-lg rounded-lg hover:bg-white/30 transition-all shrink-0"
               >
                 {showTempForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
@@ -1506,9 +1584,12 @@ function StudentPickup({ user, children }: any) {
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="0917-XXX-XXXX"
+                    placeholder="09171234567"
                     className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
                   />
+                  {phone && !phoneLooksValid && (
+                    <p className="text-xs text-amber-700 mt-1">Needs 11 digits starting with 09.</p>
+                  )}
                 </div>
 
                 <div>
@@ -1530,13 +1611,60 @@ function StudentPickup({ user, children }: any) {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-semibold text-[#1a2b4a] mb-2">
+                    Photo of the Person Picking Up
+                  </label>
+                  <div className="flex items-center gap-4">
+                    {tempPhotoUrl ? (
+                      <img src={tempPhotoUrl} alt="Person picking up" className="w-20 h-20 rounded-lg object-cover border-2 border-gray-200" />
+                    ) : (
+                      <div className="w-20 h-20 rounded-lg bg-white border-2 border-dashed border-gray-300 flex items-center justify-center">
+                        <User className="w-8 h-8 text-gray-300" />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowTempCapture(true)}
+                      className="flex items-center gap-2 px-4 py-2 min-h-11 bg-white border-2 border-gray-200 rounded-lg hover:border-[#c9a961] transition-all text-sm font-medium text-[#1a2b4a]"
+                    >
+                      <Camera className="w-4 h-4" />
+                      {tempPhoto ? 'Change photo' : 'Add photo'}
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#6b6456] mt-2">
+                    A clear photo of their face. The guard compares it with the person at the gate.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm font-semibold text-[#1a2b4a] mb-2">
+                    <Lock className="w-4 h-4" /> Your Password (to confirm it's you)
+                  </label>
+                  <ConfidentialPasswordInput
+                    value={tempPassword}
+                    onChange={setTempPassword}
+                    ariaLabel="Your password"
+                    disabled={tempSaving}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-[#c9a961] focus:ring-4 focus:ring-[#c9a961]/10 outline-none transition-all text-black"
+                  />
+                  <p className="text-xs text-[#6b6456] mt-1">Type it each time; it isn't saved or filled in by your browser.</p>
+                </div>
+
+                {tempError && (
+                  <div className="flex items-start gap-2 p-3 rounded-lg text-sm border bg-red-50 border-red-200 text-red-700">
+                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>{tempError}</span>
+                  </div>
+                )}
+
                 <button
-                  onClick={handleGenerateTempQR}
-                  disabled={!guardianName || !relationship || !phone}
+                  onClick={() => { void handleGenerateTempQR(); }}
+                  disabled={tempSaving || !guardianName || !relationship || !phone || !tempPhoto || !tempPassword}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <QrCode className="w-5 h-5" />
-                  <span className="font-semibold">Generate Temporary QR</span>
+                  <span className="font-semibold">{tempSaving ? 'Generating…' : 'Generate Temporary QR'}</span>
                 </button>
               </div>
             ) : (
@@ -1576,6 +1704,7 @@ function StudentPickup({ user, children }: any) {
                       }`}
                     >
                       <div className="flex items-start justify-between mb-3">
+                        {guardian.photoPath && <TempPickupPhoto path={guardian.photoPath} />}
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
                             <h5 className="font-semibold text-[#1a2b4a]">{guardian.name}</h5>
@@ -1700,6 +1829,16 @@ function StudentPickup({ user, children }: any) {
           </div>
         </div>
       </div>
+
+      {showTempCapture && (
+        <PhotoCaptureModal
+          title="Photo of the person picking up"
+          facingMode="environment"
+          note="This photo is shown only to school guards and the office, to check the person at the gate. Take it with their permission."
+          onSave={saveTempPhoto}
+          onClose={() => setShowTempCapture(false)}
+        />
+      )}
 
       {/* Temporary QR view/download modal */}
       {viewingQr && (

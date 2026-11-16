@@ -26,7 +26,7 @@ interface PickupQrInfo {
   relationship?: string | null;
   previous_pickup_at?: string | null;
   previous_pickup_by?: string | null;
-  guardian_photo_path?: string | null; // approved photo only; never set for temporary QRs
+  guardian_photo_path?: string | null; // approved photo, or the temporary pickup person's photo
   student_photo_path?: string | null;
 }
 
@@ -636,7 +636,7 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
                       <div className="grid grid-cols-2 gap-3">
                         <PickupPhoto
                           path={info.guardian_photo_path}
-                          label={info.kind === 'temporary' ? 'Temporary pickup (no photo)' : 'Guardian'}
+                          label={info.kind === 'temporary' ? (info.guardian_photo_path ? 'Temporary pickup person' : 'Temporary pickup (no photo)') : 'Guardian'}
                         />
                         <PickupPhoto path={info.student_photo_path} label="Student" />
                       </div>
