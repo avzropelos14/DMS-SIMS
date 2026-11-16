@@ -242,9 +242,8 @@ function App() {
   };
 
   const handleIdleTimeout = async () => {
-    const minutes = currentRole ? IDLE_LIMIT_MINUTES[currentRole] : 0;
     await handleLogout();
-    setLoginNotice(`You were signed out after ${minutes} minutes of inactivity. Please sign in again.`);
+    setLoginNotice('You were signed out after a period of inactivity. Please sign in again.');
   };
 
   // For screens shown outside the login form: on failure, sign out and show the reason there.

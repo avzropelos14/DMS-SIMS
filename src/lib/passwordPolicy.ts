@@ -103,7 +103,7 @@ export async function checkPasswordPolicy(
     const base = lower.replace(/^[^a-z]+|[^a-z]+$/g, "");
 
     if (WEAK_BASE_WORDS.has(base) || SCHOOL_TERMS.some((term) => lower.includes(term))) {
-        return "This password is too easy to guess. Avoid common words and the school's name.";
+        return "This password is weak. Please choose a different one.";
     }
 
     if (personalParts(context.email, context.names).some((part) => lower.includes(part))) {
@@ -112,11 +112,11 @@ export async function checkPasswordPolicy(
 
     const common = await loadCommonPasswords();
     if (common.has(lower)) {
-        return "This password appears on lists of commonly used passwords. Please choose a different one.";
+        return "This password is weak. Please choose a different one.";
     }
 
     if (await isPwnedPassword(password)) {
-        return "This password has appeared in a known data breach. Please choose a different one.";
+        return "This password is weak. Please choose a different one.";
     }
 
     return null;
