@@ -189,7 +189,11 @@ export function GuardPortal({ user, onLogout }: GuardPortalProps) {
       const { data, error } = await supabase.rpc('verify_pickup_qr', { p_qr: qr });
       const info = data as PickupQrInfo | null;
       if (error || !info) {
-        setScanError('Could not check this QR code. Please try again.');
+        setScanError(
+          navigator.onLine
+            ? 'Could not check this QR code. Please try again.'
+            : "Could not check this QR code: no internet. Don't release the student on the app; use the paper pickup log.",
+        );
         return;
       }
       if (!['ok', 'suspended', 'already_picked_up'].includes(info.status)) {

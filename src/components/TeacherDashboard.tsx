@@ -542,6 +542,9 @@ function MyClasses({ user, schoolYear }: any) {
   const clampScore = (v: string) => Math.max(0, Math.min(100, parseFloat(v) || 0));
 
   const [gradeInputError, setGradeInputError] = useState<string | null>(null);
+  const [gradeSaving, setGradeSaving] = useState(false);
+  const [reopenError, setReopenError] = useState<string | null>(null);
+  const [reopenSaving, setReopenSaving] = useState(false);
 
   const confirmGradeInput = async () => {
     if (!gradeModal || !selectedClass || !currentSchoolYearId) return;
@@ -562,43 +565,66 @@ function MyClasses({ user, schoolYear }: any) {
       q4: quarters.q4.score,
     };
 
+    // The grade only shows as saved once the server has it: offline, or refused, the dialog
+    // stays open with the grade still typed in, so the teacher can press Confirm again.
+    if (gradeSaving) return;
+    setGradeSaving(true);
+    setGradeInputError(null);
     let gradeRowId = target.gradeRowId;
-    if (gradeRowId) {
-      await supabase.from('grades').update({ ...quarterColumns, final_grade: final }).eq('id', gradeRowId);
-    } else {
-      const { data: inserted } = await supabase
-        .from('grades')
-        .insert({
-          student_id: target.studentId,
-          school_year_id: currentSchoolYearId,
-          class_section_subject_id: selectedClass,
-          ...quarterColumns,
-          final_grade: final,
-        })
-        .select('id')
-        .single();
-      gradeRowId = inserted?.id ?? null;
+    try {
+      if (gradeRowId) {
+        const { data: updated, error } = await supabase
+          .from('grades')
+          .update({ ...quarterColumns, final_grade: final })
+          .eq('id', gradeRowId)
+          .select('id');
+        if (error || !updated?.length) throw error ?? new Error('not saved');
+      } else {
+        const { data: inserted, error } = await supabase
+          .from('grades')
+          .insert({
+            student_id: target.studentId,
+            school_year_id: currentSchoolYearId,
+            class_section_subject_id: selectedClass,
+            ...quarterColumns,
+            final_grade: final,
+          })
+          .select('id')
+          .single();
+        if (error || !inserted?.id) throw error ?? new Error('not saved');
+        gradeRowId = inserted.id;
+      }
+    } catch (err) {
+      console.error('Grade not saved', err);
+      setGradeInputError("Not saved: couldn't reach the server. Check the internet connection and try again.");
+      setGradeSaving(false);
+      return;
     }
 
     // Re-entering a grade for a quarter that was reopened via an approved request closes
     // that request out, so it doesn't keep showing as editable indefinitely.
     if (target.quarters[gradeModal.quarter].status === 'editable' && target.quarters[gradeModal.quarter].score !== null) {
-      await supabase
+      const { error: fulfilError } = await supabase
         .from('grade_reopen_requests')
         .update({ status: 'fulfilled' })
         .eq('student_id', target.studentId)
         .eq('class_section_subject_id', selectedClass)
         .eq('quarter', gradeModal.quarter)
         .eq('status', 'approved');
+      // The grade itself is saved; this only tidies up the request.
+      if (fulfilError) console.error('Reopen request not closed', fulfilError);
     }
 
     setGrades(prev => prev.map(s => (s.id === gradeModal.studentId ? { ...s, quarters, final, gradeRowId } : s)));
+    setGradeSaving(false);
     setGradeModal(null);
   };
 
   const confirmReopenRequest = async () => {
-    if (!reopenTarget || !selectedClass || !currentSchoolYearId) return;
-    const { data: request } = await supabase.from('grade_reopen_requests').insert({
+    if (!reopenTarget || !selectedClass || !currentSchoolYearId || reopenSaving) return;
+    setReopenSaving(true);
+    setReopenError(null);
+    const { data: request, error: requestError } = await supabase.from('grade_reopen_requests').insert({
       student_id: reopenTarget.studentId,
       class_section_subject_id: selectedClass,
       school_year_id: currentSchoolYearId,
@@ -606,6 +632,12 @@ function MyClasses({ user, schoolYear }: any) {
       requested_by: user.employeeId ?? null,
       notes: reopenReason.trim() || null,
     }).select('id').single();
+    setReopenSaving(false);
+    if (requestError || !request?.id) {
+      console.error('Reopen request not sent', requestError);
+      setReopenError("Not sent: couldn't reach the server. Check the internet connection and try again.");
+      return;
+    }
     // The admin gets an email (the in-app alert is written by the database). Best effort.
     if (request?.id) {
       void supabase.functions.invoke('notify-office-request', { body: { kind: 'grade_reopen', id: request.id } });
@@ -1281,11 +1313,11 @@ function MyClasses({ user, schoolYear }: any) {
                   <p className="text-xs text-[#8b8476]">Once confirmed, this grade is locked and cannot be edited again unless you request the admin to reopen it.</p>
                 </div>
                 <div className="p-6 border-t border-gray-200 flex gap-3">
-                  <button onClick={() => setGradeModal(null)} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all">
+                  <button onClick={() => setGradeModal(null)} disabled={gradeSaving} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all disabled:opacity-60">
                     Cancel
                   </button>
-                  <button onClick={confirmGradeInput} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">
-                    Confirm Grade
+                  <button onClick={() => { void confirmGradeInput(); }} disabled={gradeSaving} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60">
+                    {gradeSaving ? 'Saving…' : 'Confirm Grade'}
                   </button>
                 </div>
               </div>
@@ -1317,12 +1349,13 @@ function MyClasses({ user, schoolYear }: any) {
                     className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm text-[#2c2c2c] focus:outline-none focus:border-[#c9a961] transition-all resize-none"
                   />
                 </div>
+                {reopenError && <p className="text-xs text-red-600">{reopenError}</p>}
                 <div className="flex gap-3 pt-2">
-                  <button onClick={() => { setReopenTarget(null); setReopenReason(''); }} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all">
+                  <button onClick={() => { setReopenTarget(null); setReopenReason(''); setReopenError(null); }} disabled={reopenSaving} className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-lg text-[#2c2c2c] font-medium hover:border-[#c9a961] transition-all disabled:opacity-60">
                     Cancel
                   </button>
-                  <button onClick={confirmReopenRequest} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all">
-                    Send Request
+                  <button onClick={() => { void confirmReopenRequest(); }} disabled={reopenSaving} className="flex-1 px-4 py-2.5 bg-gradient-to-r from-[#7d1935] to-[#9b2847] text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60">
+                    {reopenSaving ? 'Sending…' : 'Send Request'}
                   </button>
                 </div>
               </div>

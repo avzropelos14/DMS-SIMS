@@ -10,6 +10,7 @@ import { ParentPortal } from './components/ParentPortal';
 import { GuardPortal } from './components/GuardPortal';
 import { CashierPortal } from './components/CashierPortal';
 import { IdleLogout } from './components/shared/IdleLogout';
+import { OfflineBanner } from './components/shared/OfflineBanner';
 import { supabase } from './supabase';
 import { resolveIdentity } from './lib/resolveRole';
 import { checkTrustedDevice, getLoginStatus } from './lib/mfa';
@@ -312,12 +313,18 @@ function App() {
   }
 
   if (!currentRole) {
-    return <LoginScreen initialError={loginNotice} onAuthenticated={completeLogin} />;
+    return (
+      <>
+        <OfflineBanner />
+        <LoginScreen initialError={loginNotice} onAuthenticated={completeLogin} />
+      </>
+    );
   }
 
   return (
     <div className="min-h-screen bg-[#f5f3f0]">
       <IdleLogout limitMinutes={IDLE_LIMIT_MINUTES[currentRole]} onTimeout={() => { void handleIdleTimeout(); }} />
+      <OfflineBanner role={currentRole} />
       {currentRole === 'admin' && (
         <AdminDashboard user={currentUser} onLogout={handleLogout} tuitionFees={tuitionFees} onTuitionFeesChange={persistTuitionFees} enrollmentFees={enrollmentFees} onEnrollmentFeesChange={persistEnrollmentFees} />
       )}

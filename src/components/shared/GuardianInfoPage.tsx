@@ -180,14 +180,22 @@ export function GuardianInfoPage({
             .eq("guardian_id", editing.guardianId)
             .eq("is_primary_contact", true);
         const childIds = (primaryFor ?? []).map((r: { student_id: string }) => r.student_id);
+        let copyFailed = false;
         if (childIds.length) {
-            await supabase.from("students").update({ guardian_name: fullName, guardian_phone: phone }).in("id", childIds);
+            const { error } = await supabase.from("students").update({ guardian_name: fullName, guardian_phone: phone }).in("id", childIds);
+            if (error) copyFailed = true;
         }
         if (editing.primary) {
-            await supabase.from("students").update({ guardian_relationship: relationship }).eq("id", studentId);
+            const { error } = await supabase.from("students").update({ guardian_relationship: relationship }).eq("id", studentId);
+            if (error) copyFailed = true;
         }
 
         setSaving(false);
+        if (copyFailed) {
+            // Saving again is safe: it writes the same values.
+            setFormError("The parent's details were saved, but the copy on the student record (used by ID cards and the gate) didn't update. Check the connection and press Save again.");
+            return;
+        }
         if (lError) {
             setFormError("The name and phone were saved, but the relationship couldn't be. Please try again.");
             return;

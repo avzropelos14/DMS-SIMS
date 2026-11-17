@@ -529,7 +529,7 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
             .maybeSingle();
         if (existing) {
             if (!existing.printed) {
-                await supabase
+                const { error } = await supabase
                     .from("student_id_cards")
                     .update({
                         printed: true,
@@ -538,9 +538,10 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                             new Date().toISOString().slice(0, 10),
                     })
                     .eq("id", existing.id);
+                if (error) throw error;
             }
         } else {
-            await supabase
+            const { error } = await supabase
                 .from("student_id_cards")
                 .insert({
                     student_id: studentId,
@@ -548,10 +549,27 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
                     printed: true,
                     issued_date: new Date().toISOString().slice(0, 10),
                 });
+            if (error) throw error;
         }
     };
 
+    // The PDF is already downloaded; only the "printed" mark failed. Put the list back as it
+    // was so it doesn't claim the card is recorded as printed.
+    const PRINT_MARK_FAILED =
+        "The PDF was downloaded, but it couldn't be recorded as printed (no connection?). Download it again once the internet is back to record it.";
+    const revertPrinted = (before: IDStudent[], failedIds: string[]) => {
+        setIdStudents((prev) =>
+            prev.map((s) => {
+                if (!failedIds.includes(s.id)) return s;
+                const old = before.find((b) => b.id === s.id);
+                return old ? { ...s, idPrinted: old.idPrinted, idIssued: old.idIssued } : s;
+            }),
+        );
+        setPdfError(PRINT_MARK_FAILED);
+    };
+
     const printOne = async (id: string) => {
+        const before = idStudents;
         setIdStudents((prev) =>
             prev.map((s) =>
                 s.id === id
@@ -565,13 +583,15 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
         );
         try {
             await upsertIdCardPrinted(id);
-        } catch {
-            /* best-effort — UI already reflects the print */
+        } catch (err) {
+            console.error("Printed mark not saved", err);
+            revertPrinted(before, [id]);
         }
     };
 
     const markSelectedPrinted = async () => {
         const ids = selectedIds;
+        const before = idStudents;
         setIdStudents((prev) =>
             prev.map((s) =>
                 ids.includes(s.id)
@@ -584,9 +604,19 @@ export function IDGenerationSection({ schoolYear }: { schoolYear: string }) {
             ),
         );
         setSelectedIds([]);
-        await Promise.all(
-            ids.map((id) => upsertIdCardPrinted(id).catch(() => {})),
+        const results = await Promise.all(
+            ids.map((id) =>
+                upsertIdCardPrinted(id).then(
+                    () => null,
+                    (err) => {
+                        console.error("Printed mark not saved", err);
+                        return id;
+                    },
+                ),
+            ),
         );
+        const failed = results.filter((r): r is string => r !== null);
+        if (failed.length) revertPrinted(before, failed);
     };
 
     // --- PDF export ---

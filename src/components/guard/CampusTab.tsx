@@ -195,8 +195,12 @@ export function CampusTab({ onBack }: { onBack: () => void }) {
 
     const undo = async (s: CampusStudent) => {
         setBusy(true);
-        await supabase.rpc("clear_student_day_status", { p_student_id: s.student_id });
+        const { data, error } = await supabase.rpc("clear_student_day_status", { p_student_id: s.student_id });
         setBusy(false);
+        if (error || data?.error) {
+            flash(false, error ? "Not undone: couldn't reach the server. Check the internet connection and try again." : "Couldn't undo this. Please try again.");
+            return;
+        }
         void reload();
     };
 

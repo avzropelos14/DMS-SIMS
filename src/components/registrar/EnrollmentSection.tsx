@@ -1114,7 +1114,7 @@ export function EnrollmentSection({
             if (error) throw error;
 
             if (schoolYearId) {
-                await supabase.from("enrollments").upsert(
+                const { error: enrollRowError } = await supabase.from("enrollments").upsert(
                     {
                         student_id: id,
                         school_year_id: schoolYearId,
@@ -1125,6 +1125,17 @@ export function EnrollmentSection({
                     },
                     { onConflict: "student_id,school_year_id" },
                 );
+                if (enrollRowError) {
+                    // Without this row the student wouldn't appear in Pending Enrollment. Undo the
+                    // new student record so the form (still filled in) can simply be submitted again.
+                    console.error("Enrollment row not saved", enrollRowError);
+                    const { error: undoError } = await supabase.from("students").delete().eq("id", id);
+                    throw new Error(
+                        undoError
+                            ? `The application was only partly saved (student ID ${id}) because the connection dropped. Please don't submit it again; ask the admin to finish or remove student ${id}.`
+                            : "Not saved: couldn't reach the server. Nothing was saved, and the form is still filled in. Check the internet connection and submit again.",
+                    );
+                }
                 // Keep the requirements checklist the registrar ticked (Phase 7).
                 const reqError = await saveEnrollmentRequirements(id, schoolYearId, form.enrollmentType, form.requirements);
                 if (reqError) console.error("Requirements not saved", reqError);
